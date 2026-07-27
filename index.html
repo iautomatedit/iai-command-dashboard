@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>IAI Command Dashboard</title>
+<style>
+  :root {
+    --bg: #04080F;
+    --accent: #00FF87;
+    --text: #FFFFFF;
+    --text-secondary: rgba(255,255,255,0.55);
+    --card-bg: rgba(255,255,255,0.04);
+    --card-border: rgba(0,255,135,0.2);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    padding: 24px 16px 60px;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; }
+  header { margin-bottom: 20px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .subtitle { color: var(--text-secondary); font-size: 13px; }
+  .summary-row {
+    display: flex; gap: 10px; flex-wrap: wrap; margin: 20px 0;
+  }
+  .summary-pill {
+    flex: 1; min-width: 70px;
+    background: var(--card-bg); border: 1px solid var(--card-border);
+    border-radius: 10px; padding: 12px; text-align: center;
+  }
+  .summary-pill .n { font-size: 22px; font-weight: 700; }
+  .summary-pill .l { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
+  .dot-GREEN { background: #00FF87; }
+  .dot-AMBER { background: #FFB020; }
+  .dot-RED { background: #FF4D4F; }
+  .dot-UNKNOWN { background: rgba(255,255,255,0.3); }
+  .cards { display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 12px; }
+  @media (min-width: 640px) { .cards { grid-template-columns: 1fr 1fr; } }
+  .card {
+    background: var(--card-bg); border: 1px solid var(--card-border);
+    border-radius: 12px; padding: 16px;
+  }
+  .card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+  .card-name { font-weight: 700; font-size: 15px; }
+  .card-tier { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+  .card-health { font-size: 12px; font-weight: 700; white-space: nowrap; }
+  .card-inactive { opacity: 0.5; }
+  .stat-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px;
+  }
+  .stat { font-size: 12px; }
+  .stat .k { color: var(--text-secondary); }
+  .stat .v { font-weight: 600; margin-top: 2px; }
+  .empty, .error {
+    background: var(--card-bg); border: 1px solid var(--card-border);
+    border-radius: 12px; padding: 20px; color: var(--text-secondary); font-size: 13px;
+  }
+  footer {
+    margin-top: 30px; font-size: 11px; color: var(--text-secondary); line-height: 1.6;
+  }
+  button#refresh {
+    background: var(--accent); color: var(--bg); font-weight: 700;
+    border: none; border-radius: 8px; padding: 8px 14px; font-size: 12px;
+    cursor: pointer; margin-top: 10px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>IAI Command Dashboard</h1>
+    <div class="subtitle" id="freshness">Loading...</div>
+  </header>
+
+  <div class="summary-row" id="summaryRow"></div>
+  <div id="cardsHost"><div class="empty">Loading client data...</div></div>
+
+  <footer id="footerNote"></footer>
+</div>
+
+<script>
+async function loadDashboard() {
+  const cardsHost = document.getElementById('cardsHost');
+  const summaryRow = document.getElementById('summaryRow');
+  const freshness = document.getElementById('freshness');
+  const footerNote = document.getElementById('footerNote');
+
+  try {
+    const res = await fetch('/api/dashboard');
+    const data = await res.json();
+
+    if (data.error) {
+      cardsHost.innerHTML = '<div class="error">Could not load dashboard data: ' + escapeHtml(data.error) + '</div>';
+      freshness.textContent = '';
+      return;
+    }
+
+    const summary = data.summary || { total_clients: 0, green: 0, amber: 0, red: 0 };
+    const clients = data.clients || [];
+
+    if (data.execution_started_at) {
+      freshness.textContent = 'Data refreshed ' + timeAgo(data.execution_started_at) + ' (bridge runs every 5 minutes)';
+    } else {
+      freshness.textContent = data.note || 'No data yet.';
+    }
+
+    summaryRow.innerHTML = [
+      pill(summary.total_clients, 'Clients'),
+      pill(summary.green, 'Green'),
+      pill(summary.amber, 'Amber'),
+      pill(summary.red, 'Red')
+    ].join('');
+
+    if (!clients.length) {
+      cardsHost.innerHTML = '<div class="empty">No clients in Master Clients yet.</div>';
+    } else {
+      cardsHost.innerHTML = '<div class="cards">' + clients.map(renderCard).join('') + '</div>';
+    }
+
+    footerNote.innerHTML =
+      'MRR is not shown here because no persisted monthly-recurring-revenue field exists yet in the underlying data - ' +
+      '"Avg Service Value" below is a per-booking rate set manually per client (Build 2C), not a monthly total. ' +
+      'Health status and activity come from the same Master Clients / Health History tabs the nightly Client Health Monitor (Build 2B) writes to.';
+  } catch (err) {
+    cardsHost.innerHTML = '<div class="error">Network error loading dashboard: ' + escapeHtml(err.message) + '</div>';
+  }
+}
+
+function pill(n, label) {
+  return '<div class="summary-pill"><div class="n">' + (n ?? 0) + '</div><div class="l">' + label + '</div></div>';
+}
+
+function renderCard(c) {
+  const health = c.health_status || 'UNKNOWN';
+  const inactiveClass = c.active ? '' : ' card-inactive';
+  const lastRun = c.last_successful_run ? timeAgo(c.last_successful_run) : 'never';
+  const avgValue = (c.avg_service_value === null || c.avg_service_value === undefined)
+    ? 'not set' : ('$' + c.avg_service_value);
+
+  return (
+    '<div class="card' + inactiveClass + '">' +
+      '<div class="card-top">' +
+        '<div>' +
+          '<div class="card-name">' + escapeHtml(c.client_name || c.client_id) + '</div>' +
+          '<div class="card-tier">' + escapeHtml(c.package_tier || 'no tier') + (c.active ? '' : ' &middot; inactive') + '</div>' +
+        '</div>' +
+        '<div class="card-health"><span class="dot dot-' + health + '"></span>' + health + '</div>' +
+      '</div>' +
+      '<div class="stat-grid">' +
+        '<div class="stat"><div class="k">Last activity</div><div class="v">' + lastRun + '</div></div>' +
+        '<div class="stat"><div class="k">Runs (24h)</div><div class="v">' + (c.total_runs_24h ?? 0) + '</div></div>' +
+        '<div class="stat"><div class="k">Error rate</div><div class="v">' + (c.error_rate_pct ?? 0) + '%</div></div>' +
+        '<div class="stat"><div class="k">Avg service value</div><div class="v">' + avgValue + '</div></div>' +
+      '</div>' +
+    '</div>'
+  );
+}
+
+function timeAgo(iso) {
+  const then = new Date(iso).getTime();
+  if (isNaN(then)) return iso;
+  const diffMs = Date.now() - then;
+  const mins = Math.round(diffMs / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return mins + 'm ago';
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return hrs + 'h ago';
+  return Math.round(hrs / 24) + 'd ago';
+}
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+
+loadDashboard();
+</script>
+</body>
+</html>

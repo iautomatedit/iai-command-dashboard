@@ -1,0 +1,8 @@
+{
+  "name": "iai-command-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "IAI Command Dashboard - live client health, activity, and stats overview.",
+  "scripts": {},
+  "dependencies": {}
+}
