@@ -1,71 +1,40 @@
-// Reads the latest execution of the "Build 3A - Master Clients Bridge" n8n
-// workflow (id below) via n8n's REST API and returns its output payload.
+// Calls the "Build 3A - Master Clients Bridge" n8n workflow's production
+// webhook directly and returns its live payload.
 //
-// This does NOT call the workflow's webhook directly. The webhook's public
-// URL was confirmed unreachable from outside n8n during this build (a real,
-// unresolved n8n Cloud infrastructure issue, not a bug in this function) -
-// see decisions/log.md for the full investigation. Instead, the bridge
-// workflow refreshes itself on a 5-minute schedule trigger, and this
-// function reads back its most recent successful execution's result data.
-// That means dashboard data is as fresh as the last schedule run, not
-// instantaneous - the frontend surfaces that honestly via generated_at.
+// Note on the URL format: n8n registers a webhook with a custom `path` at
+//   /webhook/<path>
+// NOT at /webhook/<webhookId>/<path>. The webhookId form only applies when
+// the path is auto-generated. Getting this wrong returns a 404 whose message
+// ("...is not registered") is literally accurate but easy to misread as the
+// workflow being inactive. See decisions/log.md in mind-palace-app.
 
-const BRIDGE_WORKFLOW_ID = 'n3wqpOoa4qaKhnhf';
-const BRIDGE_NODE_NAME = 'Build Dashboard Payload';
+const BRIDGE_URL = 'https://xavierautomated.app.n8n.cloud/webhook/master-clients';
 
 export default async function handler(req, res) {
-  const { N8N_API_KEY, N8N_BASE_URL } = process.env;
-
-  if (!N8N_API_KEY || !N8N_BASE_URL) {
-    res.status(500).json({ error: 'Missing N8N_API_KEY or N8N_BASE_URL environment variable.' });
-    return;
-  }
-
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 7000);
 
-    const url = `${N8N_BASE_URL}/api/v1/executions?workflowId=${BRIDGE_WORKFLOW_ID}&status=success&limit=1&includeData=true`;
-    const response = await fetch(url, {
-      headers: { 'X-N8N-API-KEY': N8N_API_KEY },
-      signal: controller.signal
-    });
+    const response = await fetch(BRIDGE_URL, { signal: controller.signal });
     clearTimeout(timeout);
 
     if (!response.ok) {
-      res.status(502).json({ error: `n8n API returned ${response.status}` });
+      res.status(502).json({ error: `Bridge webhook returned ${response.status}` });
       return;
     }
 
-    const body = await response.json();
-    const execution = body.data && body.data[0];
+    const payload = await response.json();
 
-    if (!execution) {
-      res.status(200).json({
-        summary: { total_clients: 0, green: 0, amber: 0, red: 0, generated_at: null },
-        clients: [],
-        stale: true,
-        note: 'No successful bridge execution found yet. The bridge workflow refreshes every 5 minutes - check back shortly, or trigger it manually in n8n.'
-      });
+    if (!payload || !payload.summary) {
+      res.status(502).json({ error: 'Bridge responded but payload shape was unexpected.' });
       return;
     }
 
-    const runData = execution.data && execution.data.resultData && execution.data.resultData.runData;
-    const nodeOutput = runData && runData[BRIDGE_NODE_NAME] && runData[BRIDGE_NODE_NAME][0];
-    const payload = nodeOutput && nodeOutput.data && nodeOutput.data.main && nodeOutput.data.main[0] && nodeOutput.data.main[0][0] && nodeOutput.data.main[0][0].json;
-
-    if (!payload) {
-      res.status(502).json({ error: 'Bridge execution found but payload shape was unexpected.' });
-      return;
-    }
-
-    res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=120');
-    res.status(200).json({
-      ...payload,
-      execution_started_at: execution.startedAt,
-      execution_stopped_at: execution.stoppedAt
-    });
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json(payload);
   } catch (err) {
-    res.status(500).json({ error: err.name === 'AbortError' ? 'Request to n8n timed out' : String(err.message || err) });
+    res.status(500).json({
+      error: err.name === 'AbortError' ? 'Request to the n8n bridge timed out' : String(err.message || err)
+    });
   }
 }

@@ -104,8 +104,8 @@ async function loadDashboard() {
     const summary = data.summary || { total_clients: 0, green: 0, amber: 0, red: 0 };
     const clients = data.clients || [];
 
-    if (data.execution_started_at) {
-      freshness.textContent = 'Data refreshed ' + timeAgo(data.execution_started_at) + ' (bridge runs every 5 minutes)';
+    if (summary.generated_at) {
+      freshness.textContent = 'Live — read from the Master Clients sheet ' + timeAgo(summary.generated_at);
     } else {
       freshness.textContent = data.note || 'No data yet.';
     }
