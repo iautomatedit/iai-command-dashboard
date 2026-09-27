@@ -1,0 +1,30 @@
+{
+  "db_path": "paper_trades.sqlite",
+  "start_bankroll": 1000,
+  "poll_seconds": 10,
+  "market_slug_prefix": "btc-updown-15m-",
+  "window_seconds": 900,
+  "taker_fee_rate": 0.02,
+  "temporal": {
+    "min_edge": 0.04,
+    "min_secs_left": 60,
+    "max_secs_left": 840,
+    "vol_lookback_min": 60
+  },
+  "complete_set": {
+    "min_margin": 0.01
+  },
+  "kelly": {
+    "multiplier": 0.25,
+    "max_fraction": 0.05
+  },
+  "consensus": {
+    "wallets": [],
+    "min_wallets": 2,
+    "window_seconds": 900,
+    "poll_seconds": 60,
+    "max_idle_hours": 24,
+    "min_trades_7d": 10,
+    "min_history_for_sizing": 20
+  }
+}

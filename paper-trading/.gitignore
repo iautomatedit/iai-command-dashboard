@@ -1,0 +1,5 @@
+config.json
+*.sqlite
+*.sqlite-journal
+*.log
+__pycache__/
