@@ -1,11 +1,11 @@
-"""CLI: python -m ptbot {check|discover|verify|run|report|backtest|momentum}"""
+"""CLI: python -m ptbot {check|discover|verify|run|report|backtest|momentum|dashboard}"""
 import argparse
 import json
 import os
 import sys
 import time
 
-from . import backtest, consensus, feeds, momentum, report
+from . import backtest, consensus, dashboard, feeds, momentum, report
 from .engine import Engine
 from .ledger import Ledger
 
@@ -113,7 +113,8 @@ def cmd_backtest(cfg, args):
         if getattr(args, flag) is not None:
             bt[key] = getattr(args, flag)
     try:
-        print(backtest.run(cfg, args.days, os.path.join(HERE, "bt_cache")))
+        print(backtest.run(cfg, args.days, os.path.join(HERE, "bt_cache"),
+                           save_path=os.path.join(HERE, "results", "backtest_last.json")))
     except feeds.FetchError as e:
         print(f"[FAIL] {e}")
         sys.exit(1)
@@ -125,6 +126,10 @@ def cmd_momentum(cfg, args):
     except feeds.FetchError as e:
         print(f"[FAIL] {e}")
         sys.exit(1)
+
+
+def cmd_dashboard(cfg, args):
+    dashboard.serve(cfg, HERE, port=args.port, open_browser=not args.no_browser)
 
 
 def cmd_report(cfg, args):
@@ -149,6 +154,9 @@ def main():
     b.add_argument("--max-age", dest="max_age", type=int, help="ignore market prices older than N seconds")
     b.add_argument("--spread", type=float, help="assumed half spread added to the price, e.g. 0.02")
     b.add_argument("--delay", type=int, help="fill N seconds after the signal (latency test)")
+    da = sub.add_parser("dashboard", help="open the local dashboard in your browser")
+    da.add_argument("--port", type=int, default=8765)
+    da.add_argument("--no-browser", action="store_true")
     mo = sub.add_parser("momentum", help="time-series momentum backtest on daily prices")
     mo.add_argument("--assets", default="BTC-USD,ETH-USD")
     mo.add_argument("--start", default="2016-06-01", help="YYYY-MM-DD")
@@ -156,7 +164,7 @@ def main():
     cfg = load_cfg(args.config)
     {"check": cmd_check, "discover": cmd_discover, "verify": cmd_verify,
      "run": cmd_run, "report": cmd_report, "backtest": cmd_backtest,
-     "momentum": cmd_momentum}[args.cmd](cfg, args)
+     "momentum": cmd_momentum, "dashboard": cmd_dashboard}[args.cmd](cfg, args)
 
 
 if __name__ == "__main__":

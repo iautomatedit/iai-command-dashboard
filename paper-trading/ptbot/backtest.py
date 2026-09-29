@@ -278,8 +278,35 @@ def load(cfg, days, cache_dir, log=print, now=None):
     return markets, candles
 
 
-def run(cfg, days, cache_dir, log=print):
+def summary_dict(result, cfg, n_markets, days):
+    """Machine-readable version of the summary, saved for the dashboard."""
+    cal = result["calib"]
+    out = {"ran_at": int(time.time()), "days": days, "markets": n_markets,
+           "assumptions": dict(cfg["backtest"], taker_fee_rate=cfg["taker_fee_rate"]),
+           "calibration": ({"model": brier([(f, y) for f, _, y in cal]),
+                            "market": brier([(p, y) for _, p, y in cal]), "n": len(cal)} if cal else None),
+           "sources": {}, "combined_pnl": sum(t["pnl"] for t in result["trades"]),
+           "start_bankroll": float(cfg["start_bankroll"]), "end_bankroll": result["bankroll"]}
+    for src in ("temporal", "complete_set"):
+        ts = [t for t in result["trades"] if t["source"] == src]
+        st = _stats([t["unit_pnl"] for t in ts])
+        out["sources"][src] = {
+            "n": len(ts), "wins": sum(t["won"] for t in ts),
+            "pnl": sum(t["pnl"] for t in ts), "staked": sum(t["stake"] for t in ts),
+            "mean": st["mean"] if st else None,
+            "lo": st["mean"] - 2 * st["se"] if st and st["n"] > 1 else None,
+            "hi": st["mean"] + 2 * st["se"] if st and st["n"] > 1 else None,
+            "verdict": verdict(st),
+        }
+    return out
+
+
+def run(cfg, days, cache_dir, log=print, save_path=None):
     log(f"loading {days} day(s) of markets and BTC candles (cached after first run)...")
     markets, candles = load(cfg, days, cache_dir, log)
     result = simulate(markets, candles, cfg)
+    if save_path:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        with open(save_path, "w") as f:
+            json.dump(summary_dict(result, cfg, len(markets), days), f, indent=2)
     return summarize(result, cfg, len(markets), days)

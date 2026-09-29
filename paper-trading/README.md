@@ -19,6 +19,7 @@ Python 3.9+ standard library only. Nothing to `pip install`.
 | C Paper ledger | Entry at the real best ask when the signal fires, held to Polymarket's official resolution, P&L from the actual payout. | `ledger.py` |
 | Backtest | Replays A1-A3 over past markets with no look-ahead. | `backtest.py` |
 | Momentum | Daily time-series momentum on BTC/ETH vs. buy-and-hold. | `momentum.py` |
+| Dashboard | Local web view of everything above. | `dashboard.py`, `static/dashboard.html` |
 | D Report | Signal counts per source, win rate, Kelly-sized P&L, per-share P&L after fees, and a verdict that says "no edge" when the data says so. | `report.py` |
 
 Consensus signals size at **$0** until 20 of them have settled, because there
@@ -49,6 +50,25 @@ best case. Wallet consensus is not backtested for the same reason.
 
 If the backtest says no edge, don't bother paper trading that rule. If it
 says maybe, the live paper run is the real test.
+
+## Dashboard
+
+`python3 -m ptbot dashboard`
+
+Opens http://127.0.0.1:8765 in your browser. Runs on your machine only and
+reads the paper ledger read-only, so leave it open while the bot runs. Ctrl+C
+in Terminal stops it (the bot keeps running).
+
+- **Scorecard:** every strategy, how it was tested, the evidence, and a verdict.
+  Backtest rows fill in from your last `backtest` run.
+- **Momentum:** growth of $1 vs. buy-and-hold for each lookback, the full
+  metrics grid, and today's HOLD / CASH signal for BTC and ETH.
+- **Live market:** our model's odds vs. Polymarket's price for the current
+  15-minute market.
+- **Wallet consensus:** tracked wallets' latest buys and any live consensus.
+- **Paper trades and bankroll.** Trades staked at $0 are scored per share.
+
+Light and dark mode follow your Mac's setting, with a toggle top right.
 
 ## Momentum backtest (daily BTC / ETH)
 

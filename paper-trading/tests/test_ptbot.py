@@ -7,7 +7,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ptbot import backtest, consensus, engine, feeds, http, momentum, report, strategy  # noqa: E402
+from ptbot import backtest, consensus, dashboard, engine, feeds, http, momentum, report, strategy  # noqa: E402
 from ptbot.ledger import Ledger  # noqa: E402
 
 
@@ -397,6 +397,68 @@ class Momentum(unittest.TestCase):
         out = momentum.report("TEST", closes, [30, 90, 365], params)
         for s in ("buy & hold", "momentum  30d", "momentum  90d", "momentum 365d", "split test", "verdict"):
             self.assertIn(s, out)
+
+
+class Dashboard(unittest.TestCase):
+    def cfg(self, db):
+        c = EngineTick().cfg(db)
+        c["consensus"]["wallets"] = ["0xAAA", "0xBBB"]
+        return c
+
+    def test_state_without_ledger(self):
+        cfg = self.cfg("/nonexistent/none.sqlite")
+        del cfg["strategies"]
+        st = dashboard.ledger_state(cfg)
+        self.assertFalse(st["has_db"])
+        self.assertFalse(st["enabled"]["temporal"])
+
+    def test_state_reads_ledger_and_detects_consensus(self):
+        L = tmp_ledger()
+        now = int(time.time())
+        L.log_tick(ts=now - 5, btc=1.0, btc_source="coinbase", slug="s", start_price=1.0, secs_left=100,
+                   sigma=1e-5, fair_up=0.5, ask_up=0.51, ask_down=0.5, bid_up=0.49, bid_down=0.48)
+        sid = L.log_signal("consensus", "c1", "s", 0, "Up", 0.5, 0.5, 0.0)
+        L.open_trade(sid, "consensus", "c1", "s", 0, "Up", "t", 0.5, 0.0)
+        L.settle_market("c1", 0)
+        for w in ("0xaaa", "0xbbb"):
+            L.db.execute("INSERT INTO wallet_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                         (w, now - 60, "m9", "tok", 1, "Down", "BUY", 0.4, 5, "slug", "title", "tx" + w))
+        L.db.commit()
+        path = L.db.execute("PRAGMA database_list").fetchone()[2]
+        st = dashboard.ledger_state(self.cfg(path), now=now)
+        self.assertTrue(st["has_db"] and st["running"])
+        self.assertEqual(st["sources"]["consensus"]["settled"], 1)
+        self.assertEqual(st["trades"][0]["unit_pnl"], 0.5)
+        self.assertEqual(len(st["consensus_live"]), 1)
+        self.assertEqual(st["consensus_live"][0]["outcome"], "Down")
+
+    def test_momentum_state_shape_and_signal(self):
+        def fake(product, s, e, g):
+            return [(t, 100 * 1.002 ** i, 0, 0, 100 * 1.002 ** i * (1.01 if i % 2 else 0.99))
+                    for i, t in enumerate(range(1_400_000_000, 1_400_000_000 + 1500 * 86400, 86400)) if s <= t < e]
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(feeds, "candles", side_effect=fake), \
+             mock.patch.object(momentum.time, "sleep"):
+            out = dashboard.momentum_state(self.cfg(":memory:"), d, assets=("TEST-USD",), start="2014-05-13")
+        a = out["assets"]["TEST-USD"]
+        self.assertEqual(set(a["lookbacks"]), {"30", "90", "180", "365"})
+        self.assertEqual(a["lookbacks"]["365"]["signal"], "HOLD")
+        self.assertEqual(len(a["lookbacks"]["365"]["curve"]), len(a["buyhold"]["curve"]))
+
+    def test_server_serves_page_and_api_on_localhost(self):
+        import threading, urllib.request, json as _json
+        from http.server import ThreadingHTTPServer
+        with tempfile.TemporaryDirectory() as d:
+            srv = ThreadingHTTPServer(("127.0.0.1", 0), dashboard.make_handler(self.cfg(os.path.join(d, "x.sqlite")), d))
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            base = f"http://127.0.0.1:{srv.server_address[1]}"
+            try:
+                page = urllib.request.urlopen(base + "/").read().decode()
+                self.assertIn("Paper Desk", page)
+                self.assertEqual(_json.loads(urllib.request.urlopen(base + "/api/state").read())["has_db"], False)
+                self.assertIsNone(_json.loads(urllib.request.urlopen(base + "/api/backtest").read()))
+            finally:
+                srv.shutdown()
+                srv.server_close()
 
 
 if __name__ == "__main__":
