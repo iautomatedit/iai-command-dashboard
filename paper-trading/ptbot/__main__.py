@@ -107,6 +107,15 @@ def cmd_run(cfg, args):
     Engine(cfg).run(wallets)
 
 
+def lab_log(kind, **fields):
+    """Append-only research log. The dashboard's XP and badges come from this,
+    so they reward work actually done (tests run), never trading results."""
+    path = os.path.join(HERE, "results", "lab_log.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a") as f:
+        f.write(json.dumps({"ts": int(time.time()), "kind": kind, **fields}) + "\n")
+
+
 def cmd_backtest(cfg, args):
     bt = cfg.setdefault("backtest", {})
     for flag, key in (("max_age", "max_price_age_s"), ("spread", "half_spread"), ("delay", "entry_delay_s")):
@@ -115,6 +124,7 @@ def cmd_backtest(cfg, args):
     try:
         print(backtest.run(cfg, args.days, os.path.join(HERE, "bt_cache"),
                            save_path=os.path.join(HERE, "results", "backtest_last.json")))
+        lab_log("backtest", days=args.days, **{k: bt.get(k) for k in ("entry_delay_s", "max_price_age_s", "half_spread")})
     except feeds.FetchError as e:
         print(f"[FAIL] {e}")
         sys.exit(1)
@@ -123,6 +133,7 @@ def cmd_backtest(cfg, args):
 def cmd_momentum(cfg, args):
     try:
         print(momentum.run(args.assets.split(","), args.start, cfg, os.path.join(HERE, "bt_cache")))
+        lab_log("momentum", assets=args.assets, start=args.start)
     except feeds.FetchError as e:
         print(f"[FAIL] {e}")
         sys.exit(1)

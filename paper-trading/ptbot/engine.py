@@ -207,6 +207,12 @@ class Engine:
                 continue
             book = feeds.order_book(g["token_id"])
             if not book["best_ask"]:
+                # Usually a late buy on a near-certain outcome: nobody is left selling.
+                # Log it anyway so the signal count stays honest, but there is no fill to trade.
+                self.ledger.log_signal("consensus", g["condition_id"], g["slug"], g["outcome_idx"],
+                                       g["outcome"], None, None, None, {**g, "no_fill": True})
+                log(f"CONSENSUS {len(g['wallets'])} wallets -> {g['outcome']} on {g['slug']} "
+                    f"(wallets avg {g['wallet_avg_price']:.3f}) NO FILL: empty ask side")
                 continue
             ask, ask_size = book["best_ask"]
             cost = strategy.cost_per_share(ask, self.fee)

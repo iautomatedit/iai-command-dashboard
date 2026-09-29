@@ -48,7 +48,9 @@ def ledger_state(cfg, now=None):
     on = {"temporal": False, "complete_set": False, "consensus": True}
     on.update(cfg.get("strategies", {}))
     wallets = [w.lower() for w in cfg.get("consensus", {}).get("wallets", [])]
-    base = {"now": now, "enabled": on, "wallets_cfg": wallets, "has_db": False}
+    base = {"now": now, "enabled": on, "wallets_cfg": wallets, "has_db": False,
+            "min_wallets": cfg.get("consensus", {}).get("min_wallets", 2),
+            "window_seconds": cfg.get("consensus", {}).get("window_seconds", 900)}
     con = _ro(cfg["db_path"])
     if con is None:
         return base
@@ -119,10 +121,69 @@ def ledger_state(cfg, now=None):
             "wallets": list(per_wallet.values()),
             "wallet_events": events,
             "consensus_live": live_groups,
+            "ridge": ridge_data(con, now),
+            "lab_stats": lab_stats(con, now),
         })
         return base
     finally:
         con.close()
+
+
+def ridge_data(con, now, windows=10, window_s=900):
+    """Per recent 15m window: the cheap side's ask over time, and the hindsight
+    pair cost (cheapest Up ask + cheapest Down ask seen in that window)."""
+    rows = _rows(con, "SELECT ts, slug, ask_up, ask_down FROM ticks WHERE ts>=? ORDER BY ts",
+                 (now - windows * window_s,))
+    by = {}
+    for r in rows:
+        by.setdefault(r["slug"], []).append(r)
+    out = []
+    for slug, rs in by.items():
+        try:
+            start = int(slug.rsplit("-", 1)[1])
+        except (ValueError, IndexError):
+            continue
+        ups = [r["ask_up"] for r in rs if r["ask_up"] is not None]
+        dns = [r["ask_down"] for r in rs if r["ask_down"] is not None]
+        pts, last_bucket = [], None
+        for r in rs:
+            b = (r["ts"] - start) // 20            # one point per 20s keeps it light
+            if b == last_bucket:
+                continue
+            last_bucket = b
+            sides = [x for x in (r["ask_up"], r["ask_down"]) if x is not None]
+            pts.append([r["ts"] - start, min(sides) if sides else None])
+        out.append({"slug": slug, "start": start, "points": pts,
+                    "min_up": min(ups) if ups else None, "min_down": min(dns) if dns else None,
+                    "pair": (min(ups) + min(dns)) if ups and dns else None,
+                    "live": now < start + window_s})
+    return sorted(out, key=lambda w: w["start"], reverse=True)[:windows]
+
+
+def lab_stats(con, now):
+    days = [r["d"] for r in _rows(con, "SELECT DISTINCT date(ts, 'unixepoch', 'localtime') d FROM ticks ORDER BY d")]
+    import datetime as _dt
+    streak, day = 0, _dt.date.fromtimestamp(now)
+    have = set(days)
+    while day.isoformat() in have:
+        streak += 1
+        day -= _dt.timedelta(days=1)
+    return {"uptime_days": len(days), "streak_days": streak,
+            "settled": (_one(con, "SELECT COUNT(*) n FROM trades WHERE status='settled'") or {"n": 0})["n"],
+            "consensus_signals": (_one(con, "SELECT COUNT(*) n FROM signals WHERE source='consensus'") or {"n": 0})["n"]}
+
+
+def read_lab_log(here):
+    path = os.path.join(here, "results", "lab_log.jsonl")
+    out = []
+    if os.path.exists(path):
+        with open(path) as f:
+            for line in f:
+                try:
+                    out.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    return out
 
 
 # ------------------------------------------------------------------ momentum → JSON
@@ -234,6 +295,19 @@ def make_handler(cfg, here):
                     self._json(ledger_state(cfg))
                 elif path == "/api/momentum":
                     self._json(mom_cache.get(load_momentum))
+                elif path == "/api/lab":
+                    log = read_lab_log(here)
+                    last = None
+                    if os.path.exists(bt_path):
+                        with open(bt_path) as f:
+                            last = json.load(f)
+                    runs = [e for e in log if e.get("kind") == "backtest"]
+                    self._json({
+                        "backtest_runs": max(len(runs), 1 if last else 0),
+                        "stress_tested": any((e.get("entry_delay_s") or 0) > 0 for e in runs)
+                                         or bool(last and (last["assumptions"].get("entry_delay_s") or 0) > 0),
+                        "momentum_runs": sum(1 for e in log if e.get("kind") == "momentum"),
+                    })
                 elif path == "/api/backtest":
                     if os.path.exists(bt_path):
                         with open(bt_path) as f:

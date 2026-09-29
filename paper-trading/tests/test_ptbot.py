@@ -171,6 +171,26 @@ class EngineToggles(unittest.TestCase):
         self.assertEqual(e.enabled, {"temporal": False, "complete_set": False, "consensus": True})
 
 
+class ConsensusNoFill(unittest.TestCase):
+    def test_signal_logged_even_when_ask_side_is_empty(self):
+        fd, db = tempfile.mkstemp(suffix=".sqlite")
+        os.close(fd)
+        e = engine.Engine(EngineTick().cfg(db))
+        e.wallets = ["a", "b"]
+        group = {"condition_id": "c", "outcome_idx": 1, "outcome": "Down", "token_id": "t", "slug": "s",
+                 "title": "T", "wallets": ["a", "b"], "wallet_avg_price": 0.96, "first_ts": 1, "last_ts": 2}
+        with mock.patch.object(consensus, "ingest_wallet"), \
+             mock.patch.object(consensus, "find_consensus", return_value=[group]), \
+             mock.patch.object(feeds, "order_book", return_value={"best_bid": (0.99, 10), "best_ask": None}):
+            e.poll_consensus()
+            e.last_consensus = 0
+            e.poll_consensus()   # same group again: cooldown, no duplicate
+        sigs = e.ledger.db.execute("SELECT * FROM signals").fetchall()
+        self.assertEqual(len(sigs), 1)
+        self.assertIsNone(sigs[0]["cost"])
+        self.assertEqual(e.ledger.db.execute("SELECT COUNT(*) FROM trades").fetchone()[0], 0)
+
+
 class EngineTick(unittest.TestCase):
     def cfg(self, db):
         return {"db_path": db, "start_bankroll": 1000, "poll_seconds": 1,
@@ -443,6 +463,37 @@ class Dashboard(unittest.TestCase):
         self.assertEqual(set(a["lookbacks"]), {"30", "90", "180", "365"})
         self.assertEqual(a["lookbacks"]["365"]["signal"], "HOLD")
         self.assertEqual(len(a["lookbacks"]["365"]["curve"]), len(a["buyhold"]["curve"]))
+
+    def test_ridge_hindsight_pair_and_lab_stats(self):
+        L = tmp_ledger()
+        start = 1_800_000_000 - 1_800_000_000 % 900
+        for i, (u, d) in enumerate([(0.50, 0.52), (0.40, 0.62), (0.70, 0.31), (0.55, 0.47)]):
+            L.log_tick(ts=start + 60 * i, btc=1.0, btc_source="c", slug=f"btc-updown-15m-{start}", start_price=1.0,
+                       secs_left=900 - 60 * i, sigma=1e-5, fair_up=0.5, ask_up=u, ask_down=d, bid_up=None, bid_down=None)
+        r = dashboard.ridge_data(L.db, start + 300)
+        self.assertEqual(len(r), 1)
+        self.assertAlmostEqual(r[0]["pair"], 0.40 + 0.31)      # cheapest Up + cheapest Down, hindsight
+        self.assertTrue(r[0]["live"])
+        self.assertEqual([p[1] for p in r[0]["points"]], [0.50, 0.40, 0.31, 0.47])
+        st = dashboard.lab_stats(L.db, start + 300)
+        self.assertEqual(st["uptime_days"], 1)
+        self.assertEqual(st["streak_days"], 1)
+
+    def test_lab_endpoint_counts_logged_work(self):
+        import threading, urllib.request, json as _json
+        from http.server import ThreadingHTTPServer
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "results"))
+            with open(os.path.join(d, "results", "lab_log.jsonl"), "w") as f:
+                f.write('{"kind": "backtest", "entry_delay_s": 0}\n{"kind": "backtest", "entry_delay_s": 60}\nnot json\n')
+            srv = ThreadingHTTPServer(("127.0.0.1", 0), dashboard.make_handler(self.cfg(os.path.join(d, "x.sqlite")), d))
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            try:
+                lab = _json.loads(urllib.request.urlopen(f"http://127.0.0.1:{srv.server_address[1]}/api/lab").read())
+            finally:
+                srv.shutdown()
+                srv.server_close()
+        self.assertEqual(lab, {"backtest_runs": 2, "stress_tested": True, "momentum_runs": 0})
 
     def test_server_serves_page_and_api_on_localhost(self):
         import threading, urllib.request, json as _json

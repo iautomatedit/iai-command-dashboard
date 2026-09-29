@@ -67,8 +67,18 @@ in Terminal stops it (the bot keeps running).
   15-minute market.
 - **Wallet consensus:** tracked wallets' latest buys and any live consensus.
 - **Paper trades and bankroll.** Trades staked at $0 are scored per share.
+- **Research lab:** XP, levels and badges. They come only from research work:
+  backtests run (logged to `results/lab_log.jsonl`), stress tests, strategies
+  killed or surviving, days of live data, signals observed, trades settled.
+  Nothing rewards trading more or winning. Profit earns zero XP on purpose.
+- **Wallet radar:** tracked wallets around the edge, beams to UP or DOWN for
+  buys in the last 15 minutes. A pole glows at consensus.
+- **Buy-price ridge:** how cheap the cheaper side got in each recent market,
+  plus the hindsight pair cost (cheapest Up + cheapest Down). Hindsight only.
+- **Ticker tape and alerts:** live prices scroll across the top; wallet buys
+  and consensus signals pop up bottom right.
 
-Light and dark mode follow your Mac's setting, with a toggle top right.
+Terminal dark theme by default, light theme via the toggle top right.
 
 ## Momentum backtest (daily BTC / ETH)
 
