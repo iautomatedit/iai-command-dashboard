@@ -39,16 +39,20 @@ def btc_spot():
     raise FetchError("all BTC feeds failed: " + " | ".join(errors))
 
 
-def btc_minute_candles(start_ts, end_ts):
-    """Coinbase 1-minute candles as [(ts, open, high, low, close)] ascending."""
+def candles(product, start_ts, end_ts, granularity):
+    """Coinbase candles as [(ts, open, high, low, close)] ascending. Max 300 per call."""
     iso = lambda t: dt.datetime.fromtimestamp(t, dt.timezone.utc).isoformat()
     rows = get_json(
-        f"{COINBASE}/products/BTC-USD/candles",
-        {"granularity": 60, "start": iso(start_ts), "end": iso(end_ts)},
+        f"{COINBASE}/products/{product}/candles",
+        {"granularity": granularity, "start": iso(start_ts), "end": iso(end_ts)},
     )
     # Coinbase row: [time, low, high, open, close, volume], newest first.
-    out = [(int(r[0]), float(r[3]), float(r[2]), float(r[1]), float(r[4])) for r in rows]
-    return sorted(out)
+    return sorted((int(r[0]), float(r[3]), float(r[2]), float(r[1]), float(r[4])) for r in rows)
+
+
+def btc_minute_candles(start_ts, end_ts):
+    """Coinbase 1-minute candles as [(ts, open, high, low, close)] ascending."""
+    return candles("BTC-USD", start_ts, end_ts, 60)
 
 
 # ---------------------------------------------------------------- Polymarket

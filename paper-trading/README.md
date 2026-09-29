@@ -18,6 +18,7 @@ Python 3.9+ standard library only. Nothing to `pip install`.
 | B Wallet consensus | Only wallets whose own public trade history shows activity in the last 24h and 10+ trades in 7 days. Signal only when 2+ (configurable to 3) distinct wallets BUY the same outcome of the same market within 15 minutes. One wallet is never enough. | `consensus.py` |
 | C Paper ledger | Entry at the real best ask when the signal fires, held to Polymarket's official resolution, P&L from the actual payout. | `ledger.py` |
 | Backtest | Replays A1-A3 over past markets with no look-ahead. | `backtest.py` |
+| Momentum | Daily time-series momentum on BTC/ETH vs. buy-and-hold. | `momentum.py` |
 | D Report | Signal counts per source, win rate, Kelly-sized P&L, per-share P&L after fees, and a verdict that says "no edge" when the data says so. | `report.py` |
 
 Consensus signals size at **$0** until 20 of them have settled, because there
@@ -48,6 +49,37 @@ best case. Wallet consensus is not backtested for the same reason.
 
 If the backtest says no edge, don't bother paper trading that rule. If it
 says maybe, the live paper run is the real test.
+
+## Momentum backtest (daily BTC / ETH)
+
+`python3 -m ptbot momentum`
+
+Time-series momentum (Moskowitz, Ooi & Pedersen 2012): hold the coin when its
+trailing return is positive, go flat when negative, size by volatility,
+rebalance weekly, 0.5% cost per unit traded (Coinbase retail taker range).
+Uses Coinbase daily closes since mid-2016, cached after the first run.
+
+How to read it:
+- **Buy & hold row first.** Momentum has to beat just holding the coin on
+  Sharpe (return per unit of risk) or it is not worth running.
+- **Every lookback is shown** (30, 90, 180, 365 days). If only one setting
+  looks good, that is luck. A real effect shows up across most of them.
+- **Split test:** must beat buy-and-hold in both halves.
+- **Verdict** also checks whether the Sharpe is more than 2 standard errors
+  from zero.
+
+Settings live under `"momentum"` in `config.json` (`allow_short`,
+`max_leverage`, `cost`, `lookbacks`). Leave leverage at 1.0.
+
+## Live strategies on/off
+
+`"strategies"` in `config.json`. Temporal and complete sets are **off** by
+default: the stress-tested backtest (60s delay, 60s price freshness, 2 cent
+spread) showed a negative edge. Wallet consensus is on.
+
+Wallet selection now also requires `min_directional` (default 0.8): the
+wallet must buy only one outcome in at least 80% of the markets it trades.
+Two-sided wallets are market makers, and their buys are not signals.
 
 ## Run it (Mac, beginner steps)
 

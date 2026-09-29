@@ -1,11 +1,11 @@
-"""CLI: python -m ptbot {check|discover|verify|run|report|backtest}"""
+"""CLI: python -m ptbot {check|discover|verify|run|report|backtest|momentum}"""
 import argparse
 import json
 import os
 import sys
 import time
 
-from . import backtest, consensus, feeds, report
+from . import backtest, consensus, feeds, momentum, report
 from .engine import Engine
 from .ledger import Ledger
 
@@ -67,11 +67,14 @@ def cmd_discover(cfg, args):
     cids = recent_btc_condition_ids(cfg, args.windows)
     print(f"scanned {len(cids)} recent BTC markets")
     cands = consensus.discover_candidates(cids, top_n=args.top)
-    checked = consensus.verify_wallets([w for w, _ in cands], c["max_idle_hours"], c["min_trades_7d"])
+    checked = consensus.verify_wallets([w for w, _ in cands], c["max_idle_hours"], c["min_trades_7d"],
+                                       c.get("min_directional", 0.8))
     markets = dict(cands)
-    print(f"{'wallet':44s} {'mkts':>4s} {'last(h)':>7s} {'24h':>4s} {'7d':>4s} active")
-    for w, s, active in checked:
-        print(f"{w:44s} {markets[w]:4d} {str(s['last_trade_age_h']):>7s} {s['trades_24h']:4d} {s['trades_7d']:4d} {'YES' if active else 'no'}")
+    print(f"{'wallet':44s} {'mkts':>4s} {'last(h)':>7s} {'24h':>4s} {'7d':>4s} {'1-side':>6s} use")
+    for w, s, ok in checked:
+        print(f"{w:44s} {markets[w]:4d} {str(s['last_trade_age_h']):>7s} {s['trades_24h']:4d} {s['trades_7d']:4d} "
+              f"{str(s['directional']):>6s} {'YES' if ok else 'no'}")
+    print("1-side = share of markets where the wallet bought only one outcome. Two-sided bots are market makers, not signals.")
     chosen = [w for w, _, a in checked if a][: args.pick]
     if args.write and chosen:
         raw = json.load(open(args.config))
@@ -83,8 +86,10 @@ def cmd_discover(cfg, args):
 def active_wallets(cfg):
     c = cfg["consensus"]
     good = []
-    for w, s, active in consensus.verify_wallets(c["wallets"], c["max_idle_hours"], c["min_trades_7d"]):
-        print(f"{'ACTIVE ' if active else 'DROPPED'} {w} last trade {s['last_trade_age_h']}h ago, {s['trades_7d']} trades in 7d")
+    for w, s, active in consensus.verify_wallets(c["wallets"], c["max_idle_hours"], c["min_trades_7d"],
+                                                 c.get("min_directional", 0.8)):
+        print(f"{'ACTIVE ' if active else 'DROPPED'} {w} last trade {s['last_trade_age_h']}h ago, "
+              f"{s['trades_7d']} trades in 7d, one-sided in {s['directional']} of markets")
         if active:
             good.append(w.lower())
     return good
@@ -114,6 +119,14 @@ def cmd_backtest(cfg, args):
         sys.exit(1)
 
 
+def cmd_momentum(cfg, args):
+    try:
+        print(momentum.run(args.assets.split(","), args.start, cfg, os.path.join(HERE, "bt_cache")))
+    except feeds.FetchError as e:
+        print(f"[FAIL] {e}")
+        sys.exit(1)
+
+
 def cmd_report(cfg, args):
     print(report.build(Ledger(cfg["db_path"], cfg["start_bankroll"]), cfg["consensus"]["wallets"]))
 
@@ -125,7 +138,7 @@ def main():
     sub.add_parser("check")
     d = sub.add_parser("discover")
     d.add_argument("--windows", type=int, default=24, help="recent 15m markets to scan")
-    d.add_argument("--top", type=int, default=15)
+    d.add_argument("--top", type=int, default=40)
     d.add_argument("--pick", type=int, default=5)
     d.add_argument("--write", action="store_true", help="save active wallets into config")
     sub.add_parser("verify")
@@ -136,10 +149,14 @@ def main():
     b.add_argument("--max-age", dest="max_age", type=int, help="ignore market prices older than N seconds")
     b.add_argument("--spread", type=float, help="assumed half spread added to the price, e.g. 0.02")
     b.add_argument("--delay", type=int, help="fill N seconds after the signal (latency test)")
+    mo = sub.add_parser("momentum", help="time-series momentum backtest on daily prices")
+    mo.add_argument("--assets", default="BTC-USD,ETH-USD")
+    mo.add_argument("--start", default="2016-06-01", help="YYYY-MM-DD")
     args = ap.parse_args()
     cfg = load_cfg(args.config)
     {"check": cmd_check, "discover": cmd_discover, "verify": cmd_verify,
-     "run": cmd_run, "report": cmd_report, "backtest": cmd_backtest}[args.cmd](cfg, args)
+     "run": cmd_run, "report": cmd_report, "backtest": cmd_backtest,
+     "momentum": cmd_momentum}[args.cmd](cfg, args)
 
 
 if __name__ == "__main__":

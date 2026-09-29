@@ -7,7 +7,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ptbot import backtest, consensus, engine, feeds, http, report, strategy  # noqa: E402
+from ptbot import backtest, consensus, engine, feeds, http, momentum, report, strategy  # noqa: E402
 from ptbot.ledger import Ledger  # noqa: E402
 
 
@@ -125,6 +125,18 @@ class Consensus(unittest.TestCase):
         # outside the timeframe -> no signal
         self.assertEqual(consensus.find_consensus(L, 900, 2, now=now + 2000), [])
 
+    def test_two_sided_market_maker_is_not_directional(self):
+        now = time.time()
+        mm = [{"timestamp": now, "side": "BUY", "conditionId": f"m{i}", "outcomeIndex": j}
+              for i in range(10) for j in (0, 1)]
+        picker = [{"timestamp": now, "side": "BUY", "conditionId": f"m{i}", "outcomeIndex": i % 2}
+                  for i in range(10)] * 2
+        self.assertEqual(consensus.directional_score(mm), 0.0)
+        self.assertEqual(consensus.directional_score(picker), 1.0)
+        s_mm = consensus.activity_summary(mm * 5, now)
+        self.assertFalse(consensus.is_active(s_mm, 24, 10, 0.8))
+        self.assertTrue(consensus.is_active(consensus.activity_summary(picker, now), 24, 10, 0.8))
+
     def test_consensus_sizes_zero_until_history(self):
         L = tmp_ledger()
         p, n = consensus.consensus_prob(L, 0.55, 20)
@@ -149,11 +161,22 @@ class ReadOnly(unittest.TestCase):
                     self.assertNotIn(b, text, f"{b} found in {fn}")
 
 
+class EngineToggles(unittest.TestCase):
+    def test_dead_strategies_off_by_default(self):
+        fd, db = tempfile.mkstemp(suffix=".sqlite")
+        os.close(fd)
+        cfg = EngineTick().cfg(db)
+        del cfg["strategies"]
+        e = engine.Engine(cfg)
+        self.assertEqual(e.enabled, {"temporal": False, "complete_set": False, "consensus": True})
+
+
 class EngineTick(unittest.TestCase):
     def cfg(self, db):
         return {"db_path": db, "start_bankroll": 1000, "poll_seconds": 1,
                 "market_slug_prefix": "btc-updown-15m-", "window_seconds": 900,
                 "taker_fee_rate": 0.02,
+                "strategies": {"temporal": True, "complete_set": True, "consensus": True},
                 "temporal": {"min_edge": 0.04, "min_secs_left": 60, "max_secs_left": 840, "vol_lookback_min": 60},
                 "complete_set": {"min_margin": 0.01},
                 "kelly": {"multiplier": 0.25, "max_fraction": 0.05},
@@ -323,6 +346,57 @@ class Backtest(unittest.TestCase):
         self.assertTrue(all(m["winner_idx"] == 0 for m in ms))
         self.assertTrue(all(m["end"] <= now - 1800 for m in ms))
         self.assertEqual(calls["events"], first)   # second run served from cache
+
+
+class Momentum(unittest.TestCase):
+    def series(self, fn, n=900):
+        return [(1_500_000_000 + 86400 * i, fn(i)) for i in range(n)]
+
+    def test_uptrend_stays_long_downtrend_goes_flat(self):
+        up = self.series(lambda i: 100 * 1.002 ** i * (1.01 if i % 2 else 0.99))
+        down = self.series(lambda i: 100 * 0.998 ** i * (1.01 if i % 2 else 0.99))
+        _, _, pos_up = momentum.simulate(up, 90)
+        _, _, pos_dn = momentum.simulate(down, 90)
+        self.assertTrue(all(p > 0 for p in pos_up))
+        self.assertTrue(all(p == 0 for p in pos_dn))
+
+    def test_no_look_ahead(self):
+        base = self.series(lambda i: 100 * (1.01 if i % 3 else 0.985) ** (i % 50))
+        s1, _, p1 = momentum.simulate(base, 90, cost=0)
+        cut = 500
+        changed = base[:cut] + [(t, c * 3) for t, c in base[cut:]]   # rewrite the future
+        s2, _, p2 = momentum.simulate(changed, 90, cost=0)
+        start = max(90, 31)
+        k = cut - start - 1              # last index whose position used only data before `cut`
+        self.assertEqual(p1[:k], p2[:k])
+        self.assertEqual(s1[:k - 1], s2[:k - 1])
+
+    def test_costs_are_charged_on_turnover(self):
+        zig = self.series(lambda i: 100 * (1.3 if (i // 60) % 2 else 1.0) * (1.01 if i % 2 else 0.99))
+        free, _, _ = momentum.simulate(zig, 30, cost=0)
+        paid, _, _ = momentum.simulate(zig, 30, cost=0.01)
+        self.assertLess(sum(paid), sum(free))
+
+    def test_leverage_cap(self):
+        calm = self.series(lambda i: 100 * 1.001 ** i * (1.0005 if i % 2 else 0.9995))
+        _, _, pos = momentum.simulate(calm, 90, target_vol=5.0, max_leverage=1.0)
+        self.assertLessEqual(max(pos), 1.0)
+
+    def test_metrics_and_verdict(self):
+        m = momentum.metrics([0.01, -0.005] * 200)
+        self.assertGreater(m["sharpe"], 0)
+        self.assertLess(m["max_dd"], 0)
+        flat = momentum.metrics([0.0001, -0.0001] * 200)
+        v = momentum.verdict([flat, flat], [m, m], flat, m, 1.1)
+        self.assertIn("NOT", v)
+
+    def test_report_shows_every_lookback_and_benchmark(self):
+        closes = self.series(lambda i: 100 * 1.001 ** i * (1.02 if i % 2 else 0.98), n=1200)
+        params = {"rebalance_days": 7, "vol_window": 30, "target_vol": 0.5, "max_leverage": 1.0,
+                  "allow_short": False, "cost": 0.005}
+        out = momentum.report("TEST", closes, [30, 90, 365], params)
+        for s in ("buy & hold", "momentum  30d", "momentum  90d", "momentum 365d", "split test", "verdict"):
+            self.assertIn(s, out)
 
 
 if __name__ == "__main__":

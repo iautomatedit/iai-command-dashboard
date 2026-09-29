@@ -12,31 +12,50 @@ from . import feeds
 DAY = 86400
 
 
+def directional_score(trades):
+    """Share of markets where the wallet bought only ONE outcome.
+
+    Market makers and arb bots buy both sides of nearly every market to earn
+    the spread; their buys are not opinions. A wallet that picks a side
+    scores near 1.0, a two-sided bot scores near 0.
+    """
+    sides = defaultdict(set)
+    for t in trades:
+        if t.get("side") == "BUY" and t.get("conditionId") is not None:
+            sides[t["conditionId"]].add(t.get("outcomeIndex"))
+    if not sides:
+        return None
+    return sum(1 for s in sides.values() if len(s) == 1) / len(sides)
+
+
 def activity_summary(trades, now=None):
     now = now or time.time()
     ts = sorted((int(t["timestamp"]) for t in trades), reverse=True)
+    d = directional_score(trades)
     return {
         "n_trades_page": len(ts),
         "last_trade_age_h": round((now - ts[0]) / 3600, 1) if ts else None,
         "trades_24h": sum(1 for t in ts if now - t <= DAY),
         "trades_7d": sum(1 for t in ts if now - t <= 7 * DAY),
+        "directional": round(d, 2) if d is not None else None,
     }
 
 
-def is_active(summary, max_idle_hours, min_trades_7d):
+def is_active(summary, max_idle_hours, min_trades_7d, min_directional=0.0):
     return (
         summary["last_trade_age_h"] is not None
         and summary["last_trade_age_h"] <= max_idle_hours
         and summary["trades_7d"] >= min_trades_7d
+        and (summary.get("directional") or 0) >= min_directional
     )
 
 
-def verify_wallets(wallets, max_idle_hours, min_trades_7d, fetch=feeds.wallet_trades):
-    """Return [(wallet, summary, active_bool)] from each wallet's real trades."""
+def verify_wallets(wallets, max_idle_hours, min_trades_7d, min_directional=0.0, fetch=feeds.wallet_trades):
+    """Return [(wallet, summary, qualifies)] from each wallet's real trades."""
     out = []
     for w in wallets:
         s = activity_summary(fetch(w, limit=100))
-        out.append((w, s, is_active(s, max_idle_hours, min_trades_7d)))
+        out.append((w, s, is_active(s, max_idle_hours, min_trades_7d, min_directional)))
     return out
 
 

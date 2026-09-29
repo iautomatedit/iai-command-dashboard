@@ -22,6 +22,11 @@ class Engine:
         self.last_consensus = 0
         self.last_settle = 0
         self.wallets = []
+        # Temporal + complete sets failed the stress-tested backtest, so they
+        # are off unless explicitly turned back on in config.
+        on = {"temporal": False, "complete_set": False, "consensus": True}
+        on.update(cfg.get("strategies", {}))
+        self.enabled = on
 
     # ---------------------------------------------------------- market window
     def current_window(self, now):
@@ -112,8 +117,10 @@ class Engine:
         )
 
         books = {0: (up_tok, cost_up, ask_up), 1: (down_tok, cost_dn, ask_dn)}
-        self.check_temporal(win, m, fair_up, secs_left, books, spot)
-        self.check_complete_set(win, m, books)
+        if self.enabled["temporal"]:
+            self.check_temporal(win, m, fair_up, secs_left, books, spot)
+        if self.enabled["complete_set"]:
+            self.check_complete_set(win, m, books)
 
     # ---------------------------------------------------------- Part A.1
     def check_temporal(self, win, m, fair_up, secs_left, books, spot):
@@ -184,7 +191,7 @@ class Engine:
     # ---------------------------------------------------------- Part B
     def poll_consensus(self):
         c = self.cfg["consensus"]
-        if not self.wallets or time.time() - self.last_consensus < c["poll_seconds"]:
+        if not self.enabled["consensus"] or not self.wallets or time.time() - self.last_consensus < c["poll_seconds"]:
             return
         self.last_consensus = time.time()
         for w in self.wallets:
@@ -233,7 +240,8 @@ class Engine:
     # ---------------------------------------------------------- loop
     def run(self, wallets):
         self.wallets = wallets
-        log(f"paper trading started. bankroll=${self.ledger.bankroll():.2f} wallets={len(wallets)}")
+        on = ", ".join(k for k, v in self.enabled.items() if v) or "none"
+        log(f"paper trading started. bankroll=${self.ledger.bankroll():.2f} wallets={len(wallets)} strategies: {on}")
         while True:
             for step in (self.tick, self.poll_consensus, self.settle):
                 try:

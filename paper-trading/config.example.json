@@ -5,6 +5,11 @@
   "market_slug_prefix": "btc-updown-15m-",
   "window_seconds": 900,
   "taker_fee_rate": 0.02,
+  "strategies": {
+    "temporal": false,
+    "complete_set": false,
+    "consensus": true
+  },
   "temporal": {
     "min_edge": 0.04,
     "min_secs_left": 60,
@@ -25,12 +30,27 @@
     "poll_seconds": 60,
     "max_idle_hours": 24,
     "min_trades_7d": 10,
-    "min_history_for_sizing": 20
+    "min_history_for_sizing": 20,
+    "min_directional": 0.8
   },
   "backtest": {
     "half_spread": 0.01,
     "max_stake_usd": 100,
     "max_price_age_s": 300,
     "entry_delay_s": 0
+  },
+  "momentum": {
+    "lookbacks": [
+      30,
+      90,
+      180,
+      365
+    ],
+    "rebalance_days": 7,
+    "vol_window": 30,
+    "target_vol": 0.5,
+    "max_leverage": 1.0,
+    "allow_short": false,
+    "cost": 0.005
   }
 }
