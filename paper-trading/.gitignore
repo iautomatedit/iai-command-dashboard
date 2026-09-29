@@ -3,3 +3,4 @@ config.json
 *.sqlite-journal
 *.log
 __pycache__/
+bt_cache/

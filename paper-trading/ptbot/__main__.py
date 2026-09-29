@@ -1,11 +1,11 @@
-"""CLI: python -m ptbot {check|discover|verify|run|report}"""
+"""CLI: python -m ptbot {check|discover|verify|run|report|backtest}"""
 import argparse
 import json
 import os
 import sys
 import time
 
-from . import consensus, feeds, report
+from . import backtest, consensus, feeds, report
 from .engine import Engine
 from .ledger import Ledger
 
@@ -102,6 +102,14 @@ def cmd_run(cfg, args):
     Engine(cfg).run(wallets)
 
 
+def cmd_backtest(cfg, args):
+    try:
+        print(backtest.run(cfg, args.days, os.path.join(HERE, "bt_cache")))
+    except feeds.FetchError as e:
+        print(f"[FAIL] {e}")
+        sys.exit(1)
+
+
 def cmd_report(cfg, args):
     print(report.build(Ledger(cfg["db_path"], cfg["start_bankroll"]), cfg["consensus"]["wallets"]))
 
@@ -119,10 +127,12 @@ def main():
     sub.add_parser("verify")
     sub.add_parser("run")
     sub.add_parser("report")
+    b = sub.add_parser("backtest")
+    b.add_argument("--days", type=float, default=7, help="days of past markets to replay")
     args = ap.parse_args()
     cfg = load_cfg(args.config)
     {"check": cmd_check, "discover": cmd_discover, "verify": cmd_verify,
-     "run": cmd_run, "report": cmd_report}[args.cmd](cfg, args)
+     "run": cmd_run, "report": cmd_report, "backtest": cmd_backtest}[args.cmd](cfg, args)
 
 
 if __name__ == "__main__":

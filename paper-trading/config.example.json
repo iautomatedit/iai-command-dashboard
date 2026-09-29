@@ -26,5 +26,10 @@
     "max_idle_hours": 24,
     "min_trades_7d": 10,
     "min_history_for_sizing": 20
+  },
+  "backtest": {
+    "half_spread": 0.01,
+    "max_stake_usd": 100,
+    "max_price_age_s": 300
   }
 }

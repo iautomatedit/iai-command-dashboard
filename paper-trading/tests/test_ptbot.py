@@ -7,7 +7,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ptbot import consensus, engine, feeds, http, report, strategy  # noqa: E402
+from ptbot import backtest, consensus, engine, feeds, http, report, strategy  # noqa: E402
 from ptbot.ledger import Ledger  # noqa: E402
 
 
@@ -204,6 +204,110 @@ class EngineTick(unittest.TestCase):
         combined = sum(r["pnl"] for r in rows)
         per_share = 1 - rows[0]["cost"] - rows[1]["cost"]
         self.assertAlmostEqual(combined, per_share * rows[0]["shares"], places=1)
+
+
+class Backtest(unittest.TestCase):
+    START = 1_800_000_000 - 1_800_000_000 % 900
+
+    def cfg(self):
+        c = EngineTick().cfg(":memory:")
+        c["backtest"] = {"half_spread": 0.01, "max_stake_usd": 100, "max_price_age_s": 300}
+        return c
+
+    def candles(self, drift_per_min=0.0):
+        """60 min of noisy pre-roll, then a window with the given drift."""
+        out, px = {}, 100000.0
+        for i in range(-61, 16):
+            ts = self.START + 60 * i
+            px *= (1.0004 if i % 2 else 0.9996) * (1 + (drift_per_min if i >= 0 else 0))
+            out[ts] = (ts, px, px, px, px)
+        return out
+
+    def market(self, up_price_fn, winner):
+        hist_up = [(self.START + 60 * i, up_price_fn(i)) for i in range(0, 15)]
+        hist_dn = [(t, round(1 - p, 4)) for t, p in hist_up]
+        return {"start": self.START, "end": self.START + 900, "condition_id": "c", "slug": "s",
+                "winner_idx": winner, "hist": [hist_up, hist_dn]}
+
+    def test_price_at_respects_time_and_staleness(self):
+        h = [(100, 0.4), (160, 0.5)]
+        self.assertIsNone(backtest._price_at(h, 99, 300))
+        self.assertEqual(backtest._price_at(h, 159, 300), 0.4)
+        self.assertEqual(backtest._price_at(h, 160, 300), 0.5)
+        self.assertIsNone(backtest._price_at(h, 1000, 300))
+
+    def test_stale_market_during_btc_rally_trades_up_and_wins(self):
+        c = self.candles(drift_per_min=0.0015)
+        r = backtest.simulate([self.market(lambda i: 0.5, winner=0)], c, self.cfg())
+        temporal = [t for t in r["trades"] if t["source"] == "temporal"]
+        self.assertEqual(len(temporal), 1)
+        self.assertEqual(temporal[0]["idx"], 0)
+        self.assertGreater(temporal[0]["pnl"], 0)
+
+    def test_market_that_tracks_the_model_gives_no_temporal_trades(self):
+        c = self.candles(drift_per_min=0.0015)
+        cfg = self.cfg()
+        s0 = c[self.START][1]
+
+        def fair(i):
+            t = self.START + 60 * i
+            if t - 60 not in c or i == 0:
+                return 0.5
+            closes = [c[x][4] for x in range(t - 60 - 3600, t, 60) if x in c]
+            sig = strategy.realized_vol_per_sec(closes)
+            return round(strategy.fair_prob_up(c[t - 60][4], s0, sig, self.START + 900 - t), 4)
+        r = backtest.simulate([self.market(fair, winner=0)], c, cfg)
+        self.assertEqual([t for t in r["trades"] if t["source"] == "temporal"], [])
+
+    def test_no_look_ahead_future_candles_do_not_change_early_decisions(self):
+        cfg = self.cfg()
+        cfg["temporal"]["max_secs_left"] = 840
+        c1 = self.candles()
+        c2 = dict(c1)
+        for ts in range(self.START + 300, self.START + 900, 60):   # rewrite the future
+            c2[ts] = (ts, 1.0, 1.0, 1.0, 1.0)
+        m = self.market(lambda i: 0.5, winner=0)
+        early = lambda r: [x for x in r["calib"]][:5]
+        self.assertEqual(early(backtest.simulate([m], c1, cfg)), early(backtest.simulate([m], c2, cfg)))
+
+    def test_skips_unresolved_and_missing_data(self):
+        c = self.candles()
+        ms = [dict(self.market(lambda i: 0.5, 0), winner_idx=None),
+              dict(self.market(lambda i: 0.5, 0), hist=[[], []])]
+        r = backtest.simulate(ms, c, self.cfg())
+        self.assertEqual(r["skipped"]["no_winner"], 1)
+        self.assertEqual(r["skipped"]["no_history"], 1)
+        self.assertEqual(r["trades"], [])
+
+    def test_summary_reports_calibration_and_verdict(self):
+        c = self.candles(drift_per_min=0.0015)
+        r = backtest.simulate([self.market(lambda i: 0.5, winner=0)], c, self.cfg())
+        out = backtest.summarize(r, self.cfg(), 1, 1)
+        self.assertIn("CALIBRATION", out)
+        self.assertIn("INSUFFICIENT DATA", out)
+
+    def test_load_with_mocked_apis_and_cache(self):
+        cfg = self.cfg()
+        now = self.START + 900 * 5
+        calls = {"events": 0}
+
+        def event(slug):
+            calls["events"] += 1
+            return {"slug": slug, "markets": [{"condition_id": "c" + slug, "slug": slug, "question": "q",
+                    "outcomes": ["Up", "Down"], "outcome_prices": [1.0, 0.0], "token_ids": ["u", "d"],
+                    "closed": True, "end_date": None}]}
+        with tempfile.TemporaryDirectory() as d, \
+             mock.patch.object(feeds, "event_by_slug", side_effect=event), \
+             mock.patch.object(feeds, "price_history", return_value=[(self.START, 0.5)]), \
+             mock.patch.object(feeds, "btc_minute_candles_range", return_value=[(self.START, 1, 1, 1, 1)]), \
+             mock.patch.object(backtest.time, "sleep"):
+            ms, cs = backtest.load(cfg, 1, d, log=lambda *_: None, now=now)
+            first = calls["events"]
+            backtest.load(cfg, 1, d, log=lambda *_: None, now=now)
+        self.assertGreater(len(ms), 0)
+        self.assertTrue(all(m["winner_idx"] == 0 for m in ms))
+        self.assertTrue(all(m["end"] <= now - 1800 for m in ms))
+        self.assertEqual(calls["events"], first)   # second run served from cache
 
 
 if __name__ == "__main__":

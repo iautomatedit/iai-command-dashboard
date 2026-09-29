@@ -17,11 +17,37 @@ Python 3.9+ standard library only. Nothing to `pip install`.
 | A3 Kelly sizing | `f* = (p*b - q) / b`, quarter Kelly, capped at 5% of paper bankroll, capped again by the real size on the best ask. | `strategy.kelly_fraction` |
 | B Wallet consensus | Only wallets whose own public trade history shows activity in the last 24h and 10+ trades in 7 days. Signal only when 2+ (configurable to 3) distinct wallets BUY the same outcome of the same market within 15 minutes. One wallet is never enough. | `consensus.py` |
 | C Paper ledger | Entry at the real best ask when the signal fires, held to Polymarket's official resolution, P&L from the actual payout. | `ledger.py` |
+| Backtest | Replays A1-A3 over past markets with no look-ahead. | `backtest.py` |
 | D Report | Signal counts per source, win rate, Kelly-sized P&L, per-share P&L after fees, and a verdict that says "no edge" when the data says so. | `report.py` |
 
 Consensus signals size at **$0** until 20 of them have settled, because there
 is no honest prior that copying wallets beats the market. They are still
 logged and scored per share, so the edge (or lack of it) gets measured.
+
+## Backtest first (hours, not weeks)
+
+`python3 -m ptbot backtest --days 7`
+
+Replays Part A over past BTC 15-minute markets using Polymarket's public price
+history and Coinbase 1-minute candles. First run downloads roughly 700 markets
+per week of history and takes several minutes; after that it is cached in
+`bt_cache/`.
+
+What it prints:
+- **Calibration:** Brier score of our model vs. Polymarket's own price at every
+  minute. If the market is as accurate as our model, there is no information
+  edge, no matter what the P&L line says.
+- **Per strategy:** win rate, P&L, and first half vs. second half. An edge
+  that shows up in only one half is noise.
+- **Verdict:** same rules as the live report.
+
+Limits: Polymarket does not publish old order books, so the ask is modeled as
+last price + `half_spread` (default 1 cent) and stakes are capped at
+`max_stake_usd`. Real fills would likely be worse. Treat a backtest as the
+best case. Wallet consensus is not backtested for the same reason.
+
+If the backtest says no edge, don't bother paper trading that rule. If it
+says maybe, the live paper run is the real test.
 
 ## Run it (Mac, beginner steps)
 
@@ -30,6 +56,7 @@ logged and scored per share, so the edge (or lack of it) gets measured.
 2. Create your config: `cp config.example.json config.json`
 3. Step 0 precheck. Every line must say `[OK]`:
    `python3 -m ptbot check`
+   Then run the backtest above before anything else.
 4. Find genuinely active wallets from real trade data and save the top 5:
    `python3 -m ptbot discover --write`
    Look at the table it prints. Only rows marked `YES` get saved.

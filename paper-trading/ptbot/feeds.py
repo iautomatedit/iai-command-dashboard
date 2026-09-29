@@ -120,3 +120,28 @@ def wallet_trades(wallet, limit=100):
 
 def market_trades(condition_id, limit=500):
     return get_json(f"{DATA}/trades", {"market": condition_id, "limit": limit, "takerOnly": "false"})
+
+
+def price_history(token_id, start_ts, end_ts, fidelity_min=1):
+    """Polymarket CLOB price history as [(ts, price)] ascending.
+
+    These are traded/mid prices, not the historical ask. Backtests must add
+    a spread assumption on top, or fills will look better than reality.
+    """
+    d = get_json(f"{CLOB}/prices-history",
+                 {"market": token_id, "startTs": int(start_ts), "endTs": int(end_ts), "fidelity": fidelity_min})
+    return sorted((int(x["t"]), float(x["p"])) for x in d.get("history", []))
+
+
+def btc_minute_candles_range(start_ts, end_ts, pause=0.15):
+    """Coinbase caps a candle request at 300 bars; page through longer ranges."""
+    import time as _time
+    out = {}
+    t = int(start_ts)
+    while t < end_ts:
+        chunk_end = min(t + 300 * 60, int(end_ts))
+        for row in btc_minute_candles(t, chunk_end):
+            out[row[0]] = row
+        t = chunk_end
+        _time.sleep(pause)
+    return [out[k] for k in sorted(out)]
