@@ -30,6 +30,7 @@
   "backtest": {
     "half_spread": 0.01,
     "max_stake_usd": 100,
-    "max_price_age_s": 300
+    "max_price_age_s": 300,
+    "entry_delay_s": 0
   }
 }

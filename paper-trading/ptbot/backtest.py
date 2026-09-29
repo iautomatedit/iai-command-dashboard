@@ -57,6 +57,17 @@ def simulate(markets, candles, cfg):
             return None
         return strategy.cost_per_share(min(0.99, p + bt["half_spread"]), fee)
 
+    delay = bt.get("entry_delay_s", 0)
+
+    def fill_cost(m, idx, t):
+        """Cost if the order lands `delay` seconds after the signal. With a
+        delay, the fill uses the price printed by then, whatever it is."""
+        if not delay:
+            return None
+        return cost(_price_at(m["hist"][idx], t + delay, bt["max_price_age_s"]))
+
+    skipped["no_fill_price"] = 0
+
     def stake_for(p, c):
         s = strategy.position_size(bankroll, p, c, k["multiplier"], k["max_fraction"])
         return min(s, bt["max_stake_usd"])
@@ -95,10 +106,15 @@ def simulate(markets, candles, cfg):
                 sig = strategy.temporal_signal(fair_up, costs[0], costs[1], t_cfg["min_edge"])
                 if sig and not any(h["source"] == "temporal" and h["idx"] == sig[0] for h in held):
                     idx, p, c, edge = sig
-                    stake = stake_for(p, c)
-                    held.append({"source": "temporal", "idx": idx, "cost": c, "stake": stake,
-                                 "shares": stake / c, "ts": t, "p": p, "edge": edge, "set": False})
-                    bankroll -= stake
+                    if delay:
+                        c = fill_cost(m, idx, t)
+                    if c is None:
+                        skipped["no_fill_price"] += 1
+                    else:
+                        stake = stake_for(p, c)
+                        held.append({"source": "temporal", "idx": idx, "cost": c, "stake": stake,
+                                     "shares": stake / c, "ts": t, "p": p, "edge": edge, "set": False})
+                        bankroll -= stake
 
             # A2 complete set, legged
             for h in list(held):
@@ -107,7 +123,10 @@ def simulate(markets, candles, cfg):
                 other = 1 - h["idx"]
                 locked = strategy.complete_set_gap(h["cost"], costs[other], margin)
                 if locked is not None:
-                    c = costs[other]
+                    c = fill_cost(m, other, t) if delay else costs[other]
+                    if c is None:
+                        continue
+                    locked = 1.0 - h["cost"] - c   # what the delayed fill actually locks, may be < 0
                     stake = round(h["shares"] * c, 2)
                     h["set"] = True
                     held.append({"source": "complete_set", "idx": other, "cost": c, "stake": stake,
@@ -146,7 +165,9 @@ def summarize(result, cfg, n_markets, days):
     lines = [f"BACKTEST: {days} day(s), {n_markets} BTC 15m markets loaded",
              f"  skipped: {result['skipped']}",
              f"  assumptions: ask = last price + {cfg['backtest']['half_spread']:.3f}, "
-             f"fee {cfg['taker_fee_rate'] * 100:.1f}%, stake cap ${cfg['backtest']['max_stake_usd']}", ""]
+             f"fee {cfg['taker_fee_rate'] * 100:.1f}%, stake cap ${cfg['backtest']['max_stake_usd']}, "
+             f"prices older than {cfg['backtest']['max_price_age_s']}s ignored, "
+             f"entry delay {cfg['backtest'].get('entry_delay_s', 0)}s", ""]
 
     cal = result["calib"]
     if cal:
@@ -177,6 +198,11 @@ def summarize(result, cfg, n_markets, days):
         lines.append(f"  verdict: {verdict(_stats([t['unit_pnl'] for t in ts]))}")
         lines.append("")
 
+    if trades:
+        tot = sum(t["pnl"] for t in trades)
+        lines.append(f"ALL COMBINED (a legged set = temporal leg + its hedge): P&L ${tot:+.2f} "
+                     f"on ${sum(t['stake'] for t in trades):.2f} staked")
+        lines.append("")
     start = float(cfg["start_bankroll"])
     lines.append(f"Paper bankroll: ${start:.2f} -> ${result['bankroll']:.2f} ({result['bankroll'] - start:+.2f})")
     lines.append("A backtest is an upper bound. Live fills, latency and competition make it worse, not better.")

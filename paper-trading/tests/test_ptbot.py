@@ -270,6 +270,21 @@ class Backtest(unittest.TestCase):
         early = lambda r: [x for x in r["calib"]][:5]
         self.assertEqual(early(backtest.simulate([m], c1, cfg)), early(backtest.simulate([m], c2, cfg)))
 
+    def test_entry_delay_fills_at_the_later_price(self):
+        c = self.candles(drift_per_min=0.0015)
+        cfg = self.cfg()
+        stale = backtest.simulate([self.market(lambda i: 0.5, winner=0)], c, cfg)
+        k = ([t for t in stale["trades"] if t["source"] == "temporal"][0]["ts"] - self.START) // 60
+        # market stale at 0.5 until the signal minute, then reprices to 0.97 one print later
+        m = self.market(lambda i: 0.5 if i <= k else 0.97, winner=0)
+        t0 = [t for t in backtest.simulate([m], c, cfg)["trades"] if t["source"] == "temporal"][0]
+        cfg["backtest"]["entry_delay_s"] = 60
+        t1 = [t for t in backtest.simulate([m], c, cfg)["trades"] if t["source"] == "temporal"][0]
+        self.assertEqual((t0["idx"], t1["idx"]), (0, 0))
+        self.assertLess(t0["cost"], 0.6)
+        self.assertGreater(t1["cost"], 0.95)       # the edge was a stale print
+        self.assertLess(t1["unit_pnl"], t0["unit_pnl"])
+
     def test_skips_unresolved_and_missing_data(self):
         c = self.candles()
         ms = [dict(self.market(lambda i: 0.5, 0), winner_idx=None),

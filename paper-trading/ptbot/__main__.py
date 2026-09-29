@@ -103,6 +103,10 @@ def cmd_run(cfg, args):
 
 
 def cmd_backtest(cfg, args):
+    bt = cfg.setdefault("backtest", {})
+    for flag, key in (("max_age", "max_price_age_s"), ("spread", "half_spread"), ("delay", "entry_delay_s")):
+        if getattr(args, flag) is not None:
+            bt[key] = getattr(args, flag)
     try:
         print(backtest.run(cfg, args.days, os.path.join(HERE, "bt_cache")))
     except feeds.FetchError as e:
@@ -129,6 +133,9 @@ def main():
     sub.add_parser("report")
     b = sub.add_parser("backtest")
     b.add_argument("--days", type=float, default=7, help="days of past markets to replay")
+    b.add_argument("--max-age", dest="max_age", type=int, help="ignore market prices older than N seconds")
+    b.add_argument("--spread", type=float, help="assumed half spread added to the price, e.g. 0.02")
+    b.add_argument("--delay", type=int, help="fill N seconds after the signal (latency test)")
     args = ap.parse_args()
     cfg = load_cfg(args.config)
     {"check": cmd_check, "discover": cmd_discover, "verify": cmd_verify,
