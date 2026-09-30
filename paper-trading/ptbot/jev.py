@@ -62,7 +62,12 @@ def build_state(start_ts, end_ts, now, price_to_beat, spot, closes):
 
 
 def ask_up(state, api_key, timeout=2.0, model="jev-latest", _open=urllib.request.urlopen):
-    """Return (probability_up, latency_ms). Raises JevError on any failure."""
+    """Return (probability_up, latency_ms, model_that_answered). Raises JevError on any failure.
+
+    Pin `model` to an exact version in config (e.g. the one your TypeSafe console
+    lists). With `jev-latest` the answering version can change mid-test, so the
+    version TypeSafe reports back is recorded with every prediction.
+    """
     if not api_key:
         raise JevError("TYPESAFE_API_KEY is not set")
     body = json.dumps({"model": model, "state": state,
@@ -85,7 +90,7 @@ def ask_up(state, api_key, timeout=2.0, model="jev-latest", _open=urllib.request
         raise JevError(f"unexpected response shape: {str(data)[:200]}") from e
     if not 0.0 <= p <= 1.0:
         raise JevError(f"probability out of range: {p}")
-    return p, latency
+    return p, latency, str(data.get("model") or model)
 
 
 # ------------------------------------------------------------------ scoring
@@ -127,17 +132,26 @@ def challenge_stats(con):
     """Scores from the ledger: Jev vs Polymarket's price, and Jev vs our model,
     on predictions whose markets have settled."""
     try:
-        rows = con.execute("SELECT slug, jev_up, model_up, market_up, outcome, latency_ms, error FROM jev_preds").fetchall()
+        rows = con.execute("SELECT slug, jev_up, model_up, market_up, outcome, latency_ms, error, model "
+                           "FROM jev_preds ORDER BY ts").fetchall()
     except Exception:
         return None
     if not rows:
         return None
-    ok = [r for r in rows if r[1] is not None]
+    answered = [r for r in rows if r[1] is not None]
+    versions = {}
+    for r in answered:
+        versions[r[7] or "unknown"] = versions.get(r[7] or "unknown", 0) + 1
+    # Score only the version that answered most recently: mixing versions would
+    # blend two different models into one verdict.
+    current = (answered[-1][7] or "unknown") if answered else None
+    ok = [r for r in answered if (r[7] or "unknown") == current]
     done = [r for r in ok if r[4] is not None]
     vs_market = paired_brier([(r[0], r[1], r[3], r[4]) for r in done if r[3] is not None])
     vs_model = paired_brier([(r[0], r[1], r[2], r[4]) for r in done if r[2] is not None])
     lat = [r[5] for r in ok if r[5] is not None]
     kind, label = verdict(vs_market)
-    return {"asked": len(rows), "answered": len(ok), "errors": len(rows) - len(ok), "settled": len(done),
+    return {"asked": len(rows), "answered": len(answered), "errors": len(rows) - len(answered), "settled": len(done),
+            "model": current, "versions": versions,
             "avg_latency_ms": sum(lat) / len(lat) if lat else None,
             "vs_market": vs_market, "vs_model": vs_model, "verdict": kind, "verdict_label": label}

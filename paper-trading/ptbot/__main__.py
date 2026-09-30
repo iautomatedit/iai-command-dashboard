@@ -152,12 +152,16 @@ def cmd_jev_test(cfg, args):
             print("[WAIT] window just opened; Coinbase has no candle for it yet. Try again in a minute.")
             sys.exit(1)
         state = jev.build_state(start, start + w, now, open_px, spot, [c[4] for c in candles])
-        p, ms = jev.ask_up(state, os.environ.get("TYPESAFE_API_KEY", ""), timeout=5.0)
+        model = (cfg.get("jev") or {}).get("model") or "jev-latest"
+        p, ms, answered_by = jev.ask_up(state, os.environ.get("TYPESAFE_API_KEY", ""), timeout=5.0, model=model)
     except (feeds.FetchError, jev.JevError) as e:
         print(f"[FAIL] {e}")
         sys.exit(1)
     print(f"[OK] Jev says P(Up) = {p:.3f} for the window closing {state['window']['closes_at_utc']} "
           f"(BTC {state['btc']['change_since_open_pct']:+.3f}% since open, {state['window']['seconds_remaining']}s left), {ms:.0f} ms")
+    print(f"     answered by model: {answered_by}  (requested: {model})")
+    if model == "jev-latest":
+        print(f'     Pin it: set "model": "{answered_by}" under "jev" in config.json')
 
 
 def cmd_dashboard(cfg, args):

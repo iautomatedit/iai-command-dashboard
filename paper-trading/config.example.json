@@ -55,6 +55,7 @@
   },
   "jev": {
     "enabled": false,
+    "model": "jev-latest",
     "every_seconds": 60,
     "timeout_s": 2.0
   }

@@ -717,8 +717,9 @@ function consensusRow() {
 function jevRow() {
   const j = STATE && STATE.jev; if (!j) return null;
   const m = j.vs_market;
-  const ev = m ? `Brier Jev ${m.brier_jev.toFixed(4)} vs. market ${m.brier_other.toFixed(4)} over ${m.n_windows} windows (lower is better).${j.vs_model ? ` Our model ${j.vs_model.brier_other.toFixed(4)}.` : ""} ${j.errors} errors${j.avg_latency_ms ? `, ${Math.round(j.avg_latency_ms)} ms avg` : ""}.`
-               : `${j.answered} answers, ${j.settled} settled so far. ${j.errors} errors.`;
+  const ver = j.model ? `[${j.model}] ` : "";
+  const ev = ver + (m ? `Brier Jev ${m.brier_jev.toFixed(4)} vs. market ${m.brier_other.toFixed(4)} over ${m.n_windows} windows (lower is better).${j.vs_model ? ` Our model ${j.vs_model.brier_other.toFixed(4)}.` : ""} ${j.errors} errors${j.avg_latency_ms ? `, ${Math.round(j.avg_latency_ms)} ms avg` : ""}.`
+               : `${j.answered} answers, ${j.settled} settled so far. ${j.errors} errors.`);
   const map = { collecting: ["warning", "testing"], beats: ["good", "alive"], worse: ["critical", "dead"], tie: ["critical", "dead"] };
   const [kind, st] = map[j.verdict] || ["none", "testing"];
   return [kind, j.verdict_label, ev, st];

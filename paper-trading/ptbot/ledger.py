@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS wallet_cursor (wallet TEXT PRIMARY KEY, last_ts INTEG
 CREATE TABLE IF NOT EXISTS jev_preds (
   ts INTEGER, slug TEXT, end_ts INTEGER, secs_left INTEGER,
   jev_up REAL, model_up REAL, market_up REAL, latency_ms REAL, error TEXT,
-  outcome INTEGER
+  outcome INTEGER, model TEXT
 );
 """
 
@@ -42,6 +42,9 @@ class Ledger:
         self.db = sqlite3.connect(path)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        cols = {r[1] for r in self.db.execute("PRAGMA table_info(jev_preds)")}
+        if "model" not in cols:   # ledgers created before version tracking
+            self.db.execute("ALTER TABLE jev_preds ADD COLUMN model TEXT")
         if self.meta("started_at") is None:
             self.set_meta("started_at", int(time.time()))
             self.set_meta("start_bankroll", start_bankroll)

@@ -72,7 +72,9 @@ def build(ledger, wallets):
     js = _jev.challenge_stats(db)
     if js:
         lines.append("")
-        lines.append("JEV CHALLENGE (measurement only, never trades):")
+        lines.append(f"JEV CHALLENGE (measurement only, never trades), scoring model {js['model']}:")
+        if len(js["versions"]) > 1:
+            lines.append(f"  NOTE: answers came from {len(js['versions'])} versions {js['versions']}; only the latest is scored")
         lines.append(f"  asked {js['asked']}, answered {js['answered']}, errors {js['errors']}, "
                      f"settled {js['settled']}" + (f", avg latency {js['avg_latency_ms']:.0f} ms" if js["avg_latency_ms"] else ""))
         for name, st in (("vs Polymarket price", js["vs_market"]), ("vs our model", js["vs_model"])):

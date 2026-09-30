@@ -98,8 +98,17 @@ Setup:
 2. Add it to your shell once, never to `config.json`:
    `echo 'export TYPESAFE_API_KEY=your_key_here' >> ~/.zshrc && source ~/.zshrc`
 3. Check it works: `python3 -m ptbot jev-test`
-4. Turn it on in `config.json`: `"jev": {"enabled": true, "every_seconds": 60, "timeout_s": 2.0}`
+4. Turn it on in `config.json`: `"jev": {"enabled": true, "model": "jev-latest", "every_seconds": 60, "timeout_s": 2.0}`
+   then pin the version: `jev-test` prints which version answered; put that
+   exact name in `"model"` so a TypeSafe release can't split the test in two.
+   Every prediction also records the version that answered, and only the
+   latest version is scored.
 5. Restart the bot. Results appear in `python3 -m ptbot report` and on the dashboard board.
+
+Keep results private. TypeSafe's customer agreement reportedly bans publishing
+benchmark or performance results (section 2.3(f)) and training other models on
+Jev's answers (2.3(b)). Read the agreement when you sign up, and don't post these
+numbers publicly (PULSE, X, anywhere).
 
 Cost: one small request per minute (about 1,440 a day). Check TypeSafe's current
 pricing; at their published per-token rate this is cents per day.

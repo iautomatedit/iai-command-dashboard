@@ -542,8 +542,8 @@ class JevChallenge(unittest.TestCase):
             sent["url"], sent["auth"] = req.full_url, req.get_header("Authorization")
             sent["body"] = json.loads(req.data.decode())
             return self.FakeResp(b'{"model": "jev-1", "answers": {"up": {"type": "noul", "noul": 0.62}}}')
-        p, ms = jev.ask_up({"window": {}}, "KEY", _open=opener)
-        self.assertEqual(p, 0.62)
+        p, ms, ver = jev.ask_up({"window": {}}, "KEY", _open=opener)
+        self.assertEqual((p, ver), (0.62, "jev-1"))
         self.assertEqual(sent["url"], "https://api.typesafe.ai/v1/systemone")
         self.assertEqual(sent["auth"], "Bearer KEY")
         self.assertEqual(sent["body"]["model"], "jev-latest")
@@ -580,7 +580,7 @@ class JevChallenge(unittest.TestCase):
         start = 1_800_000_000 - 1_800_000_000 % 900
         win = {"start": start, "end": start + 900, "slug": f"btc-updown-15m-{start}", "start_price": 100000.0}
         with mock.patch.object(feeds, "btc_minute_candles", return_value=[(start, 1, 1, 1, 100000.0)] * 16), \
-             mock.patch.object(jev, "ask_up", return_value=(0.7, 120.0)), \
+             mock.patch.object(jev, "ask_up", return_value=(0.7, 120.0, "jev-1.13.0")), \
              mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "K"}):
             e.jev_step(win, start + 300, 100100.0, 600, 0.66, 0.64)
             e.jev_step(win, start + 310, 100100.0, 590, 0.66, 0.64)   # inside every_seconds: skipped
@@ -595,6 +595,34 @@ class JevChallenge(unittest.TestCase):
         self.assertEqual(e.ledger.db.execute("SELECT outcome FROM jev_preds").fetchone()[0], 1)
         st = jev.challenge_stats(e.ledger.db)
         self.assertEqual((st["asked"], st["settled"], st["verdict"]), (1, 1, "collecting"))
+        self.assertEqual(st["model"], "jev-1.13.0")
+
+    def test_pinned_model_is_sent_and_versions_are_not_mixed(self):
+        sent = {}
+        def opener(req, timeout):
+            sent["body"] = json.loads(req.data.decode())
+            return self.FakeResp(b'{"model": "jev-1.13.0", "answers": {"up": {"noul": 0.5}}}')
+        jev.ask_up({}, "K", model="jev-1.13.0", _open=opener)
+        self.assertEqual(sent["body"]["model"], "jev-1.13.0")
+        L = tmp_ledger()
+        for i, ver in enumerate(["jev-1.12.0"] * 3 + ["jev-1.13.0"] * 2):
+            L.db.execute("INSERT INTO jev_preds (ts, slug, end_ts, secs_left, jev_up, model_up, market_up, outcome, model) "
+                         "VALUES (?,?,?,?,?,?,?,?,?)", (i, f"w{i}", 0, 0, 0.6, 0.5, 0.5, 1, ver))
+        st = jev.challenge_stats(L.db)
+        self.assertEqual(st["model"], "jev-1.13.0")
+        self.assertEqual(st["versions"], {"jev-1.12.0": 3, "jev-1.13.0": 2})
+        self.assertEqual(st["vs_market"]["n_preds"], 2)          # older version excluded
+
+    def test_old_ledger_gets_model_column(self):
+        import sqlite3
+        fd, path = tempfile.mkstemp(suffix=".sqlite")
+        os.close(fd)
+        con = sqlite3.connect(path)
+        con.execute("CREATE TABLE jev_preds (ts INTEGER, slug TEXT, end_ts INTEGER, secs_left INTEGER, jev_up REAL, "
+                    "model_up REAL, market_up REAL, latency_ms REAL, error TEXT, outcome INTEGER)")
+        con.commit(); con.close()
+        L = Ledger(path, 1000)
+        self.assertIn("model", {r[1] for r in L.db.execute("PRAGMA table_info(jev_preds)")})
 
     def test_jev_errors_are_logged_not_fatal(self):
         fd, db = tempfile.mkstemp(suffix=".sqlite")

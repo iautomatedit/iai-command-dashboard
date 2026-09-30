@@ -32,6 +32,7 @@ class Engine:
         self.jev_on = bool(j.get("enabled"))
         self.jev_every = max(30, int(j.get("every_seconds", 60)))
         self.jev_timeout = float(j.get("timeout_s", 2.0))
+        self.jev_model = str(j.get("model") or "jev-latest")
         self.jev_last = 0
 
     # ---------------------------------------------------------- market window
@@ -143,15 +144,16 @@ class Engine:
         self.jev_last = now
         closes = [c[4] for c in feeds.btc_minute_candles(int(now) - 16 * 60, int(now))]
         state = jev.build_state(win["start"], win["end"], now, win["start_price"], spot, closes)
-        p, latency, err = None, None, None
+        p, latency, err, answered_by = None, None, None, None
         try:
-            p, latency = jev.ask_up(state, os.environ.get("TYPESAFE_API_KEY", ""), timeout=self.jev_timeout)
+            p, latency, answered_by = jev.ask_up(state, os.environ.get("TYPESAFE_API_KEY", ""),
+                                                 timeout=self.jev_timeout, model=self.jev_model)
         except jev.JevError as e:
             err = str(e)[:200]
         self.ledger.db.execute(
-            "INSERT INTO jev_preds (ts, slug, end_ts, secs_left, jev_up, model_up, market_up, latency_ms, error) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
-            (int(now), win["slug"], win["end"], secs_left, p, fair_up, market_up, latency, err))
+            "INSERT INTO jev_preds (ts, slug, end_ts, secs_left, jev_up, model_up, market_up, latency_ms, error, model) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (int(now), win["slug"], win["end"], secs_left, p, fair_up, market_up, latency, err, answered_by))
         self.ledger.db.commit()
         if err:
             log(f"JEV error: {err}")
@@ -297,7 +299,9 @@ class Engine:
         self.wallets = wallets
         on = ", ".join(k for k, v in self.enabled.items() if v) or "none"
         log(f"paper trading started. bankroll=${self.ledger.bankroll():.2f} wallets={len(wallets)} strategies: {on}"
-            + (" · jev challenge ON" if self.jev_on else ""))
+            + (f" · jev challenge ON ({self.jev_model})" if self.jev_on else ""))
+        if self.jev_on and self.jev_model == "jev-latest":
+            log("jev: model is jev-latest; pin an exact version in config so the test isn't split across releases")
         if self.jev_on and not os.environ.get("TYPESAFE_API_KEY"):
             log("jev challenge is on but TYPESAFE_API_KEY is not set; predictions will be logged as errors")
         while True:
