@@ -68,6 +68,18 @@ def build(ledger, wallets):
             lines.append(f"    Kelly-sized P&L: ${pnl:+.2f} on ${staked:.2f} staked (ROI {roi:+.1f}%)")
             lines.append(f"    avg P&L per $1-payout share (after fees): {st['mean']:+.4f}")
         lines.append(f"    verdict: {verdict(st)}")
+    from . import jev as _jev
+    js = _jev.challenge_stats(db)
+    if js:
+        lines.append("")
+        lines.append("JEV CHALLENGE (measurement only, never trades):")
+        lines.append(f"  asked {js['asked']}, answered {js['answered']}, errors {js['errors']}, "
+                     f"settled {js['settled']}" + (f", avg latency {js['avg_latency_ms']:.0f} ms" if js["avg_latency_ms"] else ""))
+        for name, st in (("vs Polymarket price", js["vs_market"]), ("vs our model", js["vs_model"])):
+            if st:
+                lines.append(f"  {name}: Brier Jev {st['brier_jev']:.4f} vs {st['brier_other']:.4f} over "
+                             f"{st['n_windows']} windows (diff 95% range {st['lo']:+.4f} to {st['hi']:+.4f}; negative = Jev better)")
+        lines.append(f"  verdict: {js['verdict_label']}")
     lines.append("")
     lines.append(f"  Paper bankroll: ${start:.2f} start -> ${start + total_pnl:.2f} realized "
                  f"({total_pnl:+.2f}), ${ledger.bankroll():.2f} free after open positions")

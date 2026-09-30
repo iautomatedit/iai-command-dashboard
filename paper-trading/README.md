@@ -19,6 +19,7 @@ Python 3.9+ standard library only. Nothing to `pip install`.
 | C Paper ledger | Entry at the real best ask when the signal fires, held to Polymarket's official resolution, P&L from the actual payout. | `ledger.py` |
 | Backtest | Replays A1-A3 over past markets with no look-ahead. | `backtest.py` |
 | Momentum | Daily time-series momentum on BTC/ETH vs. buy-and-hold. | `momentum.py` |
+| Jev challenge | Jev's P(Up) scored vs. Polymarket's price. Measurement only. | `jev.py` |
 | Dashboard | Local web view of everything above. | `dashboard.py`, `static/dashboard.html` |
 | D Report | Signal counts per source, win rate, Kelly-sized P&L, per-share P&L after fees, and a verdict that says "no edge" when the data says so. | `report.py` |
 
@@ -79,6 +80,29 @@ in Terminal stops it (the bot keeps running).
   and consensus signals pop up bottom right.
 
 Terminal dark theme by default, light theme via the toggle top right.
+
+## Jev challenge (TypeSafe)
+
+Every minute, the bot asks TypeSafe's Jev model one question: will the current
+15-minute BTC market resolve Up? Jev sees only BTC facts (price to beat, spot,
+recent one-minute closes), never Polymarket's price, so it can't just copy the
+market. After Polymarket settles, each answer is scored against Polymarket's own
+price and our volatility model.
+
+It is measurement only and never opens a paper trade. The verdict needs 200+
+settled windows and is tested per window (answers inside one window are not
+independent). Jev only earns a trading role if it beats the market price.
+
+Setup:
+1. Get an API key from TypeSafe (https://typesafe.ai).
+2. Add it to your shell once, never to `config.json`:
+   `echo 'export TYPESAFE_API_KEY=your_key_here' >> ~/.zshrc && source ~/.zshrc`
+3. Check it works: `python3 -m ptbot jev-test`
+4. Turn it on in `config.json`: `"jev": {"enabled": true, "every_seconds": 60, "timeout_s": 2.0}`
+5. Restart the bot. Results appear in `python3 -m ptbot report` and on the dashboard board.
+
+Cost: one small request per minute (about 1,440 a day). Check TypeSafe's current
+pricing; at their published per-token rate this is cents per day.
 
 ## Momentum backtest (daily BTC / ETH)
 

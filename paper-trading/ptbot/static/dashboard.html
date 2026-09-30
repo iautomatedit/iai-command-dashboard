@@ -714,10 +714,20 @@ function consensusRow() {
   const v = cs.verdict || "", pos = v.startsWith("Pos"), neg = v.startsWith("NEG");
   return [pos ? "good" : "critical", pos ? "Edge so far" : neg ? "Dead: loses" : "Dead: no edge", `${cs.settled} settled, per-share avg ${cs.mean == null ? "-" : (cs.mean * 100).toFixed(1) + "¢"}. ${v}`, pos ? "alive" : "dead"];
 }
+function jevRow() {
+  const j = STATE && STATE.jev; if (!j) return null;
+  const m = j.vs_market;
+  const ev = m ? `Brier Jev ${m.brier_jev.toFixed(4)} vs. market ${m.brier_other.toFixed(4)} over ${m.n_windows} windows (lower is better).${j.vs_model ? ` Our model ${j.vs_model.brier_other.toFixed(4)}.` : ""} ${j.errors} errors${j.avg_latency_ms ? `, ${Math.round(j.avg_latency_ms)} ms avg` : ""}.`
+               : `${j.answered} answers, ${j.settled} settled so far. ${j.errors} errors.`;
+  const map = { collecting: ["warning", "testing"], beats: ["good", "alive"], worse: ["critical", "dead"], tie: ["critical", "dead"] };
+  const [kind, st] = map[j.verdict] || ["none", "testing"];
+  return [kind, j.verdict_label, ev, st];
+}
 function allRows() {
   const a = BT ? BT.assumptions : null;
   const how = a ? `${BT.days}-day backtest, ${BT.markets} markets, ${a.entry_delay_s || 0}s delay, ${(a.half_spread * 100).toFixed(0)}¢ spread, ${(a.taker_fee_rate * 100).toFixed(0)}% fee` : "Backtest on past Polymarket markets";
   const rows = [[NAMES.temporal, how, ...btRow("temporal")], [NAMES.complete_set, how, ...btRow("complete_set")], [NAMES.consensus, "Live paper trading", ...consensusRow()]];
+  const jr = jevRow(); if (jr) rows.push(["Jev challenge (TypeSafe)", "Live: Jev's P(Up) each minute, scored vs. Polymarket's price after settlement", ...jr]);
   for (const asset of ["BTC-USD", "ETH-USD"]) { const v = momentumVerdict(asset);
     rows.push([`Momentum, ${asset.split("-")[0]}`, "Daily prices since 2016, 4 lookbacks, weekly rebalance, costs in",
       ...(v || ["none", MOM && MOM.error ? "No data" : "Loading", MOM && MOM.error ? "Couldn't load prices" : "Loading…", "testing"])]); }

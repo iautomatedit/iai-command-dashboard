@@ -8,8 +8,8 @@ import urllib.request
 import urllib.error
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-EXCLUDE_DIRS = {".git", "node_modules", ".vercel", "paper-trading"}
-EXCLUDE_FILES = {".env", ".env.example", ".gitignore", "deploy.py"}
+EXCLUDE_DIRS = {".git", "node_modules", ".vercel", "paper-trading", ".claude"}
+EXCLUDE_FILES = {".env", ".env.example", ".gitignore", "deploy.py", "CLAUDE.md"}
 PROJECT_NAME = "iai-command-dashboard"
 TEAM = "team_TW99DrYsJJ7LFf7hV8dCCsgq"
 

@@ -29,6 +29,11 @@ CREATE TABLE IF NOT EXISTS wallet_events (
   PRIMARY KEY (wallet, tx, token_id, side)
 );
 CREATE TABLE IF NOT EXISTS wallet_cursor (wallet TEXT PRIMARY KEY, last_ts INTEGER);
+CREATE TABLE IF NOT EXISTS jev_preds (
+  ts INTEGER, slug TEXT, end_ts INTEGER, secs_left INTEGER,
+  jev_up REAL, model_up REAL, market_up REAL, latency_ms REAL, error TEXT,
+  outcome INTEGER
+);
 """
 
 

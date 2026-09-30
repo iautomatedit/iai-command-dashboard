@@ -14,7 +14,7 @@ import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import consensus, feeds, momentum
+from . import consensus, feeds, jev, momentum
 from .report import SOURCES, _stats, verdict
 
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "dashboard.html")
@@ -123,6 +123,7 @@ def ledger_state(cfg, now=None):
             "consensus_live": live_groups,
             "ridge": ridge_data(con, now),
             "lab_stats": lab_stats(con, now),
+            "jev": jev.challenge_stats(con),
         })
         return base
     finally:

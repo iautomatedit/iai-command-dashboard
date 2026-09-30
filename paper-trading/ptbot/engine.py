@@ -1,9 +1,10 @@
 """Main loop: pull real data, generate signals, log paper trades, settle them."""
 import json
+import os
 import time
 import traceback
 
-from . import consensus, feeds, strategy
+from . import consensus, feeds, jev, strategy
 from .ledger import Ledger
 
 
@@ -27,6 +28,11 @@ class Engine:
         on = {"temporal": False, "complete_set": False, "consensus": True}
         on.update(cfg.get("strategies", {}))
         self.enabled = on
+        j = cfg.get("jev") or {}
+        self.jev_on = bool(j.get("enabled"))
+        self.jev_every = max(30, int(j.get("every_seconds", 60)))
+        self.jev_timeout = float(j.get("timeout_s", 2.0))
+        self.jev_last = 0
 
     # ---------------------------------------------------------- market window
     def current_window(self, now):
@@ -116,11 +122,49 @@ class Engine:
             bid_down=bd["best_bid"][0] if bd["best_bid"] else None,
         )
 
+        if self.jev_on:
+            mid = None
+            if ask_up and bu["best_bid"]:
+                mid = (ask_up[0] + bu["best_bid"][0]) / 2
+            elif ask_up:
+                mid = ask_up[0]
+            self.jev_step(win, now, spot, secs_left, fair_up, mid)
+
         books = {0: (up_tok, cost_up, ask_up), 1: (down_tok, cost_dn, ask_dn)}
         if self.enabled["temporal"]:
             self.check_temporal(win, m, fair_up, secs_left, books, spot)
         if self.enabled["complete_set"]:
             self.check_complete_set(win, m, books)
+
+    # ---------------------------------------------------------- Jev challenge (measurement only)
+    def jev_step(self, win, now, spot, secs_left, fair_up, market_up):
+        if now - self.jev_last < self.jev_every or not win.get("start_price") or secs_left < 30:
+            return
+        self.jev_last = now
+        closes = [c[4] for c in feeds.btc_minute_candles(int(now) - 16 * 60, int(now))]
+        state = jev.build_state(win["start"], win["end"], now, win["start_price"], spot, closes)
+        p, latency, err = None, None, None
+        try:
+            p, latency = jev.ask_up(state, os.environ.get("TYPESAFE_API_KEY", ""), timeout=self.jev_timeout)
+        except jev.JevError as e:
+            err = str(e)[:200]
+        self.ledger.db.execute(
+            "INSERT INTO jev_preds (ts, slug, end_ts, secs_left, jev_up, model_up, market_up, latency_ms, error) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (int(now), win["slug"], win["end"], secs_left, p, fair_up, market_up, latency, err))
+        self.ledger.db.commit()
+        if err:
+            log(f"JEV error: {err}")
+
+    def settle_jev(self):
+        rows = self.ledger.db.execute(
+            "SELECT DISTINCT slug FROM jev_preds WHERE outcome IS NULL AND end_ts < ?", (int(time.time()) - 120,)).fetchall()
+        for r in rows[:10]:
+            ev = feeds.event_by_slug(r["slug"])
+            idx = feeds.resolved_outcome_index(ev["markets"][0]) if ev and ev["markets"] else None
+            if idx is not None:
+                self.ledger.db.execute("UPDATE jev_preds SET outcome=? WHERE slug=?", (1 if idx == 0 else 0, r["slug"]))
+        self.ledger.db.commit()
 
     # ---------------------------------------------------------- Part A.1
     def check_temporal(self, win, m, fair_up, secs_left, books, spot):
@@ -232,6 +276,11 @@ class Engine:
         if time.time() - self.last_settle < 60:
             return
         self.last_settle = time.time()
+        if self.jev_on:
+            try:
+                self.settle_jev()
+            except feeds.FetchError as e:
+                log(f"jev settle lookup failed: {e}")
         cids = {r["condition_id"] for r in self.ledger.open_trades()}
         for cid in cids:
             try:
@@ -247,7 +296,10 @@ class Engine:
     def run(self, wallets):
         self.wallets = wallets
         on = ", ".join(k for k, v in self.enabled.items() if v) or "none"
-        log(f"paper trading started. bankroll=${self.ledger.bankroll():.2f} wallets={len(wallets)} strategies: {on}")
+        log(f"paper trading started. bankroll=${self.ledger.bankroll():.2f} wallets={len(wallets)} strategies: {on}"
+            + (" · jev challenge ON" if self.jev_on else ""))
+        if self.jev_on and not os.environ.get("TYPESAFE_API_KEY"):
+            log("jev challenge is on but TYPESAFE_API_KEY is not set; predictions will be logged as errors")
         while True:
             for step in (self.tick, self.poll_consensus, self.settle):
                 try:

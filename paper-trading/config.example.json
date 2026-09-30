@@ -52,5 +52,10 @@
     "max_leverage": 1.0,
     "allow_short": false,
     "cost": 0.005
+  },
+  "jev": {
+    "enabled": false,
+    "every_seconds": 60,
+    "timeout_s": 2.0
   }
 }

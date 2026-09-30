@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import tempfile
@@ -7,7 +8,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ptbot import backtest, consensus, dashboard, engine, feeds, http, momentum, report, strategy  # noqa: E402
+from ptbot import backtest, consensus, dashboard, engine, feeds, http, jev, momentum, report, strategy  # noqa: E402
 from ptbot.ledger import Ledger  # noqa: E402
 
 
@@ -148,6 +149,15 @@ class ReadOnly(unittest.TestCase):
     def test_blocks_non_allowlisted_hosts(self):
         with self.assertRaises(http.FetchError):
             http.get_json("https://example.com/order")
+
+    def test_outbound_writes_only_in_known_modules_with_fixed_hosts(self):
+        src_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ptbot")
+        senders = {fn for fn in os.listdir(src_dir) if fn.endswith(".py")
+                   and "data=" in open(os.path.join(src_dir, fn)).read()
+                   and "urllib.request.Request" in open(os.path.join(src_dir, fn)).read()}
+        self.assertIn("jev.py", senders)
+        self.assertTrue(senders <= {"jev.py", "publish.py"}, senders)
+        self.assertEqual(jev.ENDPOINT, "https://api.typesafe.ai/v1/systemone")
 
     def test_no_write_verbs_or_key_handling_in_source(self):
         src_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ptbot")
@@ -510,6 +520,96 @@ class Dashboard(unittest.TestCase):
             finally:
                 srv.shutdown()
                 srv.server_close()
+
+
+class JevChallenge(unittest.TestCase):
+    class FakeResp:
+        def __init__(self, body): self.body = body
+        def read(self): return self.body
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def test_state_is_blind_to_market_price(self):
+        st = jev.build_state(1_800_000_000, 1_800_000_900, 1_800_000_300, 100000.0, 100200.0,
+                             [100000.0 + i * 10 for i in range(16)])
+        self.assertEqual(st["window"]["seconds_remaining"], 600)
+        self.assertAlmostEqual(st["btc"]["change_since_open_pct"], 0.2)
+        self.assertEqual(len(st["btc"]["last_minute_closes"]), 15)
+        self.assertNotIn("ask", json.dumps(st).lower())        # never shown the market price
+
+    def test_request_shape_and_parse(self):
+        sent = {}
+        def opener(req, timeout):
+            sent["url"], sent["auth"] = req.full_url, req.get_header("Authorization")
+            sent["body"] = json.loads(req.data.decode())
+            return self.FakeResp(b'{"model": "jev-1", "answers": {"up": {"type": "noul", "noul": 0.62}}}')
+        p, ms = jev.ask_up({"window": {}}, "KEY", _open=opener)
+        self.assertEqual(p, 0.62)
+        self.assertEqual(sent["url"], "https://api.typesafe.ai/v1/systemone")
+        self.assertEqual(sent["auth"], "Bearer KEY")
+        self.assertEqual(sent["body"]["model"], "jev-latest")
+        self.assertEqual(sent["body"]["questions"]["up"]["type"], "noul")
+
+    def test_errors(self):
+        with self.assertRaises(jev.JevError):
+            jev.ask_up({}, "")
+        bad = lambda req, timeout: self.FakeResp(b'{"answers": {}}')
+        with self.assertRaises(jev.JevError):
+            jev.ask_up({}, "K", _open=bad)
+        oob = lambda req, timeout: self.FakeResp(b'{"answers": {"up": {"noul": 1.4}}}')
+        with self.assertRaises(jev.JevError):
+            jev.ask_up({}, "K", _open=oob)
+
+    def test_paired_brier_clusters_by_window(self):
+        rows = [(f"w{i // 10}", 0.9, 0.6, 1) for i in range(100)]   # 10 windows x 10 preds
+        st = jev.paired_brier(rows)
+        self.assertEqual((st["n_preds"], st["n_windows"]), (100, 10))
+        self.assertLess(st["brier_jev"], st["brier_other"])
+        self.assertLess(st["diff"], 0)
+        self.assertEqual(jev.verdict(st)[0], "collecting")          # 10 windows is not enough
+        many = [(f"w{i}", 0.9 if i % 2 else 0.2, 0.6 if i % 2 else 0.4, i % 2) for i in range(400)]
+        self.assertEqual(jev.verdict(jev.paired_brier(many))[0], "beats")
+        worse = [(f"w{i}", 0.5, 0.9 if i % 2 else 0.1, i % 2) for i in range(400)]
+        self.assertEqual(jev.verdict(jev.paired_brier(worse))[0], "worse")
+
+    def test_engine_logs_and_settles_predictions(self):
+        fd, db = tempfile.mkstemp(suffix=".sqlite")
+        os.close(fd)
+        cfg = EngineTick().cfg(db)
+        cfg["jev"] = {"enabled": True, "every_seconds": 60}
+        e = engine.Engine(cfg)
+        start = 1_800_000_000 - 1_800_000_000 % 900
+        win = {"start": start, "end": start + 900, "slug": f"btc-updown-15m-{start}", "start_price": 100000.0}
+        with mock.patch.object(feeds, "btc_minute_candles", return_value=[(start, 1, 1, 1, 100000.0)] * 16), \
+             mock.patch.object(jev, "ask_up", return_value=(0.7, 120.0)), \
+             mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "K"}):
+            e.jev_step(win, start + 300, 100100.0, 600, 0.66, 0.64)
+            e.jev_step(win, start + 310, 100100.0, 590, 0.66, 0.64)   # inside every_seconds: skipped
+        rows = e.ledger.db.execute("SELECT * FROM jev_preds").fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]["jev_up"], rows[0]["model_up"], rows[0]["market_up"]), (0.7, 0.66, 0.64))
+        closed = {"slug": "s", "markets": [{"condition_id": "c", "slug": "s", "question": "q", "outcomes": ["Up", "Down"],
+                  "outcome_prices": [1.0, 0.0], "token_ids": ["a", "b"], "closed": True, "end_date": None}]}
+        with mock.patch.object(feeds, "event_by_slug", return_value=closed), \
+             mock.patch.object(engine.time, "time", return_value=start + 2000):
+            e.settle_jev()
+        self.assertEqual(e.ledger.db.execute("SELECT outcome FROM jev_preds").fetchone()[0], 1)
+        st = jev.challenge_stats(e.ledger.db)
+        self.assertEqual((st["asked"], st["settled"], st["verdict"]), (1, 1, "collecting"))
+
+    def test_jev_errors_are_logged_not_fatal(self):
+        fd, db = tempfile.mkstemp(suffix=".sqlite")
+        os.close(fd)
+        cfg = EngineTick().cfg(db)
+        cfg["jev"] = {"enabled": True}
+        e = engine.Engine(cfg)
+        win = {"start": 0, "end": 900, "slug": "s", "start_price": 1.0}
+        with mock.patch.object(feeds, "btc_minute_candles", return_value=[(0, 1, 1, 1, 1.0)] * 16), \
+             mock.patch.object(jev, "ask_up", side_effect=jev.JevError("HTTP 401")):
+            e.jev_step(win, 300, 1.0, 600, 0.5, 0.5)
+        r = e.ledger.db.execute("SELECT jev_up, error FROM jev_preds").fetchone()
+        self.assertIsNone(r[0])
+        self.assertIn("401", r[1])
 
 
 if __name__ == "__main__":

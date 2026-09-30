@@ -5,7 +5,7 @@ import os
 import sys
 import time
 
-from . import backtest, consensus, dashboard, feeds, momentum, report
+from . import backtest, consensus, dashboard, feeds, jev, momentum, report
 from .engine import Engine
 from .ledger import Ledger
 
@@ -139,6 +139,27 @@ def cmd_momentum(cfg, args):
         sys.exit(1)
 
 
+def cmd_jev_test(cfg, args):
+    """One live Jev call on the current BTC market, to check the key and latency."""
+    w = cfg["window_seconds"]
+    now = int(time.time())
+    start = now // w * w
+    try:
+        spot, _ = feeds.btc_spot()
+        candles = feeds.btc_minute_candles(now - 16 * 60, now)
+        open_px = next((c[1] for c in feeds.btc_minute_candles(start, start + 60) if c[0] == start), None)
+        if open_px is None:
+            print("[WAIT] window just opened; Coinbase has no candle for it yet. Try again in a minute.")
+            sys.exit(1)
+        state = jev.build_state(start, start + w, now, open_px, spot, [c[4] for c in candles])
+        p, ms = jev.ask_up(state, os.environ.get("TYPESAFE_API_KEY", ""), timeout=5.0)
+    except (feeds.FetchError, jev.JevError) as e:
+        print(f"[FAIL] {e}")
+        sys.exit(1)
+    print(f"[OK] Jev says P(Up) = {p:.3f} for the window closing {state['window']['closes_at_utc']} "
+          f"(BTC {state['btc']['change_since_open_pct']:+.3f}% since open, {state['window']['seconds_remaining']}s left), {ms:.0f} ms")
+
+
 def cmd_dashboard(cfg, args):
     dashboard.serve(cfg, HERE, port=args.port, open_browser=not args.no_browser)
 
@@ -165,6 +186,7 @@ def main():
     b.add_argument("--max-age", dest="max_age", type=int, help="ignore market prices older than N seconds")
     b.add_argument("--spread", type=float, help="assumed half spread added to the price, e.g. 0.02")
     b.add_argument("--delay", type=int, help="fill N seconds after the signal (latency test)")
+    sub.add_parser("jev-test", help="one live Jev call to check your TYPESAFE_API_KEY")
     da = sub.add_parser("dashboard", help="open the local dashboard in your browser")
     da.add_argument("--port", type=int, default=8765)
     da.add_argument("--no-browser", action="store_true")
@@ -175,7 +197,8 @@ def main():
     cfg = load_cfg(args.config)
     {"check": cmd_check, "discover": cmd_discover, "verify": cmd_verify,
      "run": cmd_run, "report": cmd_report, "backtest": cmd_backtest,
-     "momentum": cmd_momentum, "dashboard": cmd_dashboard}[args.cmd](cfg, args)
+     "momentum": cmd_momentum, "dashboard": cmd_dashboard,
+     "jev-test": cmd_jev_test}[args.cmd](cfg, args)
 
 
 if __name__ == "__main__":
