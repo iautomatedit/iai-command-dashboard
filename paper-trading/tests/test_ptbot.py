@@ -8,7 +8,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ptbot import backtest, consensus, dashboard, engine, feeds, http, jev, momentum, report, strategy  # noqa: E402
+from ptbot import backtest, consensus, dashboard, engine, feeds, http, jev, momentum, publish, report, strategy  # noqa: E402
 from ptbot.ledger import Ledger  # noqa: E402
 
 
@@ -155,8 +155,7 @@ class ReadOnly(unittest.TestCase):
         senders = {fn for fn in os.listdir(src_dir) if fn.endswith(".py")
                    and "data=" in open(os.path.join(src_dir, fn)).read()
                    and "urllib.request.Request" in open(os.path.join(src_dir, fn)).read()}
-        self.assertIn("jev.py", senders)
-        self.assertTrue(senders <= {"jev.py", "publish.py"}, senders)
+        self.assertEqual(senders, {"jev.py", "publish.py"})
         self.assertEqual(jev.ENDPOINT, "https://api.typesafe.ai/v1/systemone")
 
     def test_no_write_verbs_or_key_handling_in_source(self):
@@ -610,6 +609,19 @@ class JevChallenge(unittest.TestCase):
         r = e.ledger.db.execute("SELECT jev_up, error FROM jev_preds").fetchone()
         self.assertIsNone(r[0])
         self.assertIn("401", r[1])
+
+
+class PublishGuards(unittest.TestCase):
+    def test_sync_off_without_config(self):
+        cfg = EngineTick().cfg(":memory:")
+        self.assertFalse(publish.Syncer(cfg, "/tmp").enabled)
+        self.assertIsNone(publish.Syncer(cfg, "/tmp").maybe_sync())
+
+    def test_only_https_vercel_app_hosts(self):
+        self.assertEqual(publish.check_url("https://ptbot-desk.vercel.app/x"), "https://ptbot-desk.vercel.app")
+        for bad in ("http://ptbot-desk.vercel.app", "https://evil.com", "https://vercel.app.evil.com", "", None):
+            with self.assertRaises(publish.SyncError):
+                publish.check_url(bad)
 
 
 if __name__ == "__main__":
